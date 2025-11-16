@@ -1,6 +1,8 @@
 pub mod auth;
 pub mod chat;
 pub mod business;
+pub mod analytics;
+pub mod legal;
 
 use actix_web::HttpResponse;
 use serde_json::json;

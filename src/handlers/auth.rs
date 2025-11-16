@@ -11,7 +11,7 @@ use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct TokenCheck {
-    pub token: Option<String>, // empty string → None
+    pub token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -54,7 +54,6 @@ pub async fn check_token(
             message: "no-token",
         },
         Some(t) => {
-            // Validate against sessions table: token must exist and not be expired
             let now = chrono::Utc::now().to_rfc3339();
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT CASE WHEN EXISTS(\n                    SELECT 1 FROM sessions\n                    WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)\n                ) THEN 1 ELSE 0 END"
@@ -111,16 +110,26 @@ pub async fn register(
         password: hashed_password,
         business_type: auth_req.business_type.unwrap_or_else(|| "general".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),
+        full_name: auth_req.full_name.clone(),
+        nickname: auth_req.nickname.clone(),
+        phone: auth_req.phone.clone(),
+        country: auth_req.country.clone(),
+        gender: auth_req.gender.clone(),
     };
 
     if let Err(_) = sqlx::query(
-        "INSERT INTO users (id, email, password, business_type, created_at) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO users (id, email, password, business_type, created_at, full_name, nickname, phone, country, gender) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&user.id)
     .bind(&user.email)
     .bind(&user.password)
     .bind(&user.business_type)
     .bind(&user.created_at)
+    .bind(&user.full_name)
+    .bind(&user.nickname)
+    .bind(&user.phone)
+    .bind(&user.country)
+    .bind(&user.gender)
     .execute(pool)
     .await
     {
@@ -162,7 +171,7 @@ pub async fn login(
     let pool = &state.pool;
 
     let row = sqlx::query(
-        "SELECT id, email, password, business_type, created_at FROM users WHERE email = ? LIMIT 1"
+        "SELECT id, email, password, business_type, created_at, full_name, nickname, phone, country, gender FROM users WHERE email = ? LIMIT 1"
     )
     .bind(&auth_req.email)
     .fetch_optional(pool)
@@ -183,6 +192,11 @@ pub async fn login(
         password: row.get::<String, _>("password"),
         business_type: row.get::<String, _>("business_type"),
         created_at: row.get::<String, _>("created_at"),
+        full_name: row.try_get::<Option<String>, _>("full_name").unwrap_or(None),
+        nickname: row.try_get::<Option<String>, _>("nickname").unwrap_or(None),
+        phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
+        country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
+        gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
     };
     
     let is_valid = match bcrypt::verify(&auth_req.password, &user.password) {

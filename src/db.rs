@@ -11,6 +11,36 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .connect_with(connect_opts)
         .await?;
 
+    // Conversations and messages for persistent chat history
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS conversations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT,
+            created_at TEXT NOT NULL
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            user_id TEXT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     // Initialize schema
     sqlx::query(
         r#"
@@ -25,6 +55,23 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
+
+    // Extend users table with optional profile fields (idempotent: ignore errors if columns exist)
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN full_name TEXT;")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN nickname TEXT;")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN phone TEXT;")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN country TEXT;")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN gender TEXT;")
+        .execute(&pool)
+        .await;
 
     sqlx::query(
         r#"
@@ -55,15 +102,15 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
-    // Seed initial record for Online Education with an explanatory answer
+    // Seed initial record for Online Education (in Russian) with an explanatory answer
     sqlx::query(
         r#"
         INSERT OR IGNORE INTO analytics_trends (name, percent_change, description, why_popular)
         VALUES (
-            'online education',
-            NULL,
-            'Leading trend capturing growth in remote learning platforms and digital courses.',
-            'Online education surged due to wider internet access, flexible self-paced formats, lower costs versus offline options, and the pandemic-driven shift to remote learning which normalized digital-first upskilling.'
+            'онлайн образование',
+            18.5,
+            'Лидирующий тренд, отражающий рост дистанционных образовательных платформ и цифровых курсов.',
+            'Онлайн‑образование стало популярным благодаря широкой доступности интернета, гибкому формату обучения в удобное время, более низкой стоимости по сравнению с офлайн‑вариантами и пандемии, которая нормализовала дистанционное повышение квалификации.'
         );
         "#,
     )
@@ -80,6 +127,19 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
             notes TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Seed preset popularity trends (in Russian)
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO popularity_trends (name, direction, percent_change, notes) VALUES
+            ('автосервис',     'growing',    4.2,  'Спрос из‑за старения автопарка и перехода от DIY к сервисам'),
+            ('кофейни',        'growing',    3.5,  'Опытное потребление и роль локальных пространств для общения'),
+            ('маркетплейсы',   'growing',    6.8,  'Переход к омниканальности, рост продавцов long‑tail и эффект агрегаторов'),
+            ('бьюти',          'decreasing', -2.1, 'Нормализация постпандемийного периода и перераспределение бюджета');
         "#,
     )
     .execute(&pool)

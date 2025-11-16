@@ -7,6 +7,11 @@ pub struct User {
     pub password: String,
     pub business_type: String,
     pub created_at: String,
+    pub full_name: Option<String>,
+    pub nickname: Option<String>,
+    pub phone: Option<String>,
+    pub country: Option<String>,
+    pub gender: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -14,4 +19,9 @@ pub struct AuthRequest {
     pub email: String,
     pub password: String,
     pub business_type: Option<String>,
+    pub full_name: Option<String>,
+    pub nickname: Option<String>,
+    pub phone: Option<String>,
+    pub country: Option<String>,
+    pub gender: Option<String>,
 }
