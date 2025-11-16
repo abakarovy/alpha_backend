@@ -14,6 +14,8 @@ pub struct ChatRequest {
     pub user_id: String,
     pub business_type: Option<String>,
     pub conversation_id: Option<String>,
+    pub output_format: Option<String>, // e.g. "xlsx" | "csv"
+    pub table: Option<TableSpec>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,6 +24,7 @@ pub struct ChatResponse {
     pub message_id: String,
     pub timestamp: String,
     pub conversation_id: String,
+    pub files: Option<Vec<FileAttachment>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,4 +47,20 @@ pub struct MessageRecord {
     pub role: String,
     pub content: String,
     pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TableSpec {
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileAttachment {
+    pub id: Option<String>,
+    pub filename: String,
+    pub mime: String,
+    pub size: usize,
+    pub content_base64: Option<String>,
+    pub download_url: Option<String>,
 }

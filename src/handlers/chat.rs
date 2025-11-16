@@ -2,10 +2,15 @@ use actix_web::{web, HttpResponse};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::models::{ChatRequest, ChatResponse, QuickAdviceRequest, MessageRecord, ConversationSummary};
+use crate::models::{ChatRequest, ChatResponse, QuickAdviceRequest, MessageRecord, ConversationSummary, FileAttachment, TableSpec};
 use crate::state::AppState;
 use crate::services::openai;
 use sqlx::Row;
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use rust_xlsxwriter::Workbook;
+use std::io::Cursor;
+use serde::Deserialize;
 
 pub async fn send_message(
     data: web::Json<ChatRequest>,
@@ -105,11 +110,29 @@ pub async fn send_message(
     .execute(pool)
     .await;
 
+    // Optionally generate a file attachment
+    let mut files: Vec<FileAttachment> = Vec::new();
+    // Priority: client hint -> AI intent extracted from response
+    let (mut fmt_opt, mut table_opt) = (chat_req.output_format.clone(), chat_req.table.clone());
+    if fmt_opt.is_none() || table_opt.is_none() {
+        if let Some((f, t)) = extract_file_intent(&ai_response) {
+            fmt_opt = Some(f);
+            table_opt = Some(t);
+        }
+    }
+    if let (Some(fmt), Some(table)) = (fmt_opt.as_deref(), table_opt.as_ref()) {
+        match generate_file_and_store(pool, fmt, table).await {
+            Ok(att) => files.push(att),
+            Err(_) => { /* ignore file errors to not break chat */ }
+        }
+    }
+
     HttpResponse::Ok().json(ChatResponse {
         response: ai_response,
         message_id: Uuid::new_v4().to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         conversation_id,
+        files: if files.is_empty() { None } else { Some(files) },
     })
 }
 
@@ -181,4 +204,100 @@ pub async fn get_conversation_history(
         }
         Err(_) => HttpResponse::InternalServerError().finish(),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct FileIntent {
+    output_format: String,
+    table: TableSpec,
+}
+
+fn extract_file_intent(text: &str) -> Option<(String, TableSpec)> {
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```");
+
+    if let Ok(intent) = serde_json::from_str::<FileIntent>(cleaned) {
+        return Some((intent.output_format, intent.table));
+    }
+
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
+        if start < end {
+            let slice = &text[start..=end];
+            if let Ok(intent) = serde_json::from_str::<FileIntent>(slice) {
+                return Some((intent.output_format, intent.table));
+            }
+        }
+    }
+    None
+}
+
+async fn generate_file_and_store(pool: &sqlx::SqlitePool, fmt: &str, table: &TableSpec) -> Result<FileAttachment, Box<dyn std::error::Error>> {
+    let (filename, mime, bytes) = match fmt.to_ascii_lowercase().as_str() {
+        "xlsx" => {
+            let mut wb = Workbook::new();
+            let ws = wb.add_worksheet();
+            for (c, h) in table.headers.iter().enumerate() {
+                ws.write_string(0, c as u16, h)?;
+            }
+            for (r, row) in table.rows.iter().enumerate() {
+                for (c, val) in row.iter().enumerate() {
+                    ws.write_string((r as u32) + 1, c as u16, val)?;
+                }
+            }
+            let mut buf: Vec<u8> = Vec::new();
+            wb.save_to_writer(&mut Cursor::new(&mut buf))?;
+            (
+                format!("report-{}.xlsx", chrono::Utc::now().format("%Y%m%d-%H%M%S")),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
+                buf,
+            )
+        }
+        "csv" => {
+            let mut s = String::new();
+            s.push_str(&table.headers.join(","));
+            s.push('\n');
+            for row in &table.rows {
+                s.push_str(&row.iter().map(|v| v.replace('\n', " ")).collect::<Vec<_>>().join(","));
+                s.push('\n');
+            }
+            (
+                format!("report-{}.csv", chrono::Utc::now().format("%Y%m%d-%H%M%S")),
+                "text/csv".to_string(),
+                s.into_bytes(),
+            )
+        }
+        _ => return Err("unsupported_format".into()),
+    };
+
+    let size = bytes.len();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO files (id, filename, mime, size, bytes) VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(&filename)
+    .bind(&mime)
+    .bind(size as i64)
+    .bind(bytes.clone())
+    .execute(pool)
+    .await?;
+
+    let content_base64 = if size <= 1024 * 1024 {
+        Some(B64.encode(&bytes))
+    } else {
+        None
+    };
+    let download_url = Some(format!("/api/files/{}", id));
+
+    Ok(FileAttachment {
+        id: Some(id),
+        filename,
+        mime,
+        size,
+        content_base64,
+        download_url,
+    })
 }

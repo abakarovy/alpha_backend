@@ -3,6 +3,7 @@ mod handlers;
 mod services;
 mod state;
 mod db;
+mod i18n;
 
 use actix_web::{web, App, HttpServer};
 use actix_web::middleware::NormalizePath;
@@ -44,6 +45,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/analytics/popularity", web::get().to(handlers::analytics::get_popularity_trends))
             .route("/api/analytics/popularity", web::post().to(handlers::analytics::upsert_popularity_trend))
             .route("/privacy-policy", web::get().to(handlers::legal::privacy_policy))
+            .route("/api/files/{id}", web::get().to(handlers::files::download_file))
     })
     .bind(("0.0.0.0", port))?
     .run()

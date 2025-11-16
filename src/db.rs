@@ -11,7 +11,6 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
         .connect_with(connect_opts)
         .await?;
 
-    // Conversations and messages for persistent chat history
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS conversations (
@@ -41,7 +40,6 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
-    // Initialize schema
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (
@@ -56,7 +54,6 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
-    // Extend users table with optional profile fields (idempotent: ignore errors if columns exist)
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN full_name TEXT;")
         .execute(&pool)
         .await;
@@ -87,7 +84,6 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
-    // Table for leading trend analytics, including percent change and an explanation
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS analytics_trends (
@@ -102,7 +98,22 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
-    // Seed initial record for Online Education (in Russian) with an explanatory answer
+    // i18n table for localized text fields of analytics_trends
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS analytics_trends_i18n (
+            name TEXT NOT NULL,
+            locale TEXT NOT NULL,
+            description TEXT,
+            why_popular TEXT,
+            PRIMARY KEY (name, locale),
+            FOREIGN KEY(name) REFERENCES analytics_trends(name)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     sqlx::query(
         r#"
         INSERT OR IGNORE INTO analytics_trends (name, percent_change, description, why_popular)
@@ -117,7 +128,21 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
-    // Table for growing/decreasing popularity across various trends (e.g., autoservice, coffee shops)
+    // Seed EN localization row for the same trend
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO analytics_trends_i18n (name, locale, description, why_popular)
+        VALUES (
+            'онлайн образование',
+            'en',
+            'Leading trend capturing growth in remote learning platforms and digital courses.',
+            'Online education surged due to wider internet access, flexible self-paced formats, lower costs versus offline options, and the pandemic-driven shift to remote learning which normalized digital-first upskilling.'
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS popularity_trends (
@@ -132,7 +157,21 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
-    // Seed preset popularity trends (in Russian)
+    // i18n table for localized notes of popularity_trends
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS popularity_trends_i18n (
+            name TEXT NOT NULL,
+            locale TEXT NOT NULL,
+            notes TEXT,
+            PRIMARY KEY (name, locale),
+            FOREIGN KEY(name) REFERENCES popularity_trends(name)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     sqlx::query(
         r#"
         INSERT OR IGNORE INTO popularity_trends (name, direction, percent_change, notes) VALUES
@@ -140,6 +179,35 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
             ('кофейни',        'growing',    3.5,  'Опытное потребление и роль локальных пространств для общения'),
             ('маркетплейсы',   'growing',    6.8,  'Переход к омниканальности, рост продавцов long‑tail и эффект агрегаторов'),
             ('бьюти',          'decreasing', -2.1, 'Нормализация постпандемийного периода и перераспределение бюджета');
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Seed EN localizations for popularity notes
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO popularity_trends_i18n (name, locale, notes) VALUES
+            ('автосервис',   'en', 'Demand from aging car fleets and shifts from DIY to professional service'),
+            ('кофейни',      'en', 'Experience-driven consumption and local community spaces'),
+            ('маркетплейсы', 'en', 'Shift to omnichannel, long-tail sellers, and aggregation effects'),
+            ('бьюти',        'en', 'Post-pandemic normalization and budget reprioritization');
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Files storage for generated attachments
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS files (
+            id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            bytes BLOB NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
         "#,
     )
     .execute(&pool)

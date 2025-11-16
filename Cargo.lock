@@ -372,11 +372,13 @@ version = "0.1.0"
 dependencies = [
  "actix-cors",
  "actix-web",
+ "base64",
  "bcrypt",
  "chrono",
  "dotenvy",
  "rand",
  "reqwest",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "sqlx",
@@ -1244,6 +1246,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "libc"
 version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1781,6 +1789,17 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rust_xlsxwriter"
+version = "0.64.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f47f5318c1e512e57c07781559367577b1eb9618325cf1574cd30d38b112c5"
+dependencies = [
+ "lazy_static",
+ "regex",
+ "zip",
 ]
 
 [[package]]
@@ -3065,6 +3084,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.110",
+]
+
+[[package]]
+name = "zip"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "760394e246e4c28189f19d488c058bf16f564016aefac5d32bb1f3b51d5e9261"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "crossbeam-utils",
+ "flate2",
 ]
 
 [[package]]

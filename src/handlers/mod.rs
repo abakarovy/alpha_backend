@@ -3,6 +3,7 @@ pub mod chat;
 pub mod business;
 pub mod analytics;
 pub mod legal;
+pub mod files;
 
 use actix_web::HttpResponse;
 use serde_json::json;
