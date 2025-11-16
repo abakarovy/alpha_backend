@@ -1,9 +1,9 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{Error, HttpResponse, web};
 use bcrypt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
-use sqlx;
+use sqlx::{self, SqlitePool};
 use sqlx::Row;
 
 use crate::models::{AuthRequest, User};
@@ -19,7 +19,30 @@ pub struct TokenStatus {
     pub valid: bool,
     pub message: &'static str,
 }
-// src/auth.rs
+#[derive(Deserialize)]
+pub struct EmailCheckReq {
+    pub email: String,
+}
+
+#[derive(Serialize)]
+pub struct EmailCheckRes {
+    pub exists: bool,
+}
+
+pub async fn email_exists(
+    body: web::Json<EmailCheckReq>,
+    pool: web::Data<SqlitePool>,
+) -> Result<HttpResponse, Error> {
+    let exists: bool = sqlx::query_scalar(
+    "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)",
+    )
+    .bind(&body.email)
+    .fetch_one(pool.get_ref())
+    .await
+    .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    Ok(HttpResponse::Ok().json(EmailCheckRes { exists }))
+}
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 
 #[derive(Debug, Serialize, Deserialize)]

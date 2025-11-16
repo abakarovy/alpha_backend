@@ -33,6 +33,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/chat/history/{user_id}", web::get().to(handlers::chat::get_conversation_history))
             .route("/api/auth/register", web::post().to(handlers::auth::register))
             .route("/api/auth/login", web::post().to(handlers::auth::login))
+            .route("/api/auth/check-user", web::get().to(handlers::auth::email_exists))
+            .route("/api/auth/check-token", web::get().to(handlers::auth::check_token))
             .route("/api/business/categories", web::get().to(handlers::business::get_categories))
             .route("/api/business/resources/{category}", web::get().to(handlers::business::get_resources))
     })
