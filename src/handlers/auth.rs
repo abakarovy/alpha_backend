@@ -30,58 +30,45 @@ pub struct EmailCheckRes {
 }
 
 pub async fn email_exists(
-    body: web::Json<EmailCheckReq>,
+    query: web::Query<EmailCheckReq>,
     pool: web::Data<SqlitePool>,
 ) -> Result<HttpResponse, Error> {
     let exists: bool = sqlx::query_scalar(
     "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)",
     )
-    .bind(&body.email)
+    .bind(&query.email)
     .fetch_one(pool.get_ref())
     .await
     .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(EmailCheckRes { exists }))
 }
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String, // user id
-    pub exp: usize,
-}
-
-/// Returns Ok(claims) if the token is valid, Err(_) otherwise.
-pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
-    let validation = Validation::default();
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_ref()),
-        &validation,
-    )?;
-    Ok(token_data.claims)
-}
 
 pub async fn check_token(
-    body: web::Json<TokenCheck>,
-    app_state: web::Data<crate::AppState>,
+    query: web::Query<TokenCheck>,
+    pool: web::Data<SqlitePool>,
 ) -> HttpResponse {
-    let status = match &body.token {
+    let status = match &query.token {
         None => TokenStatus {
             valid: false,
             message: "no-token",
         },
         Some(t) => {
-            // reuse whatever verify fn you already have
-            match crate::handlers::auth::verify_jwt(t, &app_state.jwt_secret) {
-                Ok(_) => TokenStatus {
-                    valid: true,
-                    message: "valid",
-                },
-                Err(_) => TokenStatus {
-                    valid: false,
-                    message: "expired-or-invalid",
-                },
+            // Validate against sessions table: token must exist and not be expired
+            let now = chrono::Utc::now().to_rfc3339();
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT CASE WHEN EXISTS(\n                    SELECT 1 FROM sessions\n                    WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)\n                ) THEN 1 ELSE 0 END"
+            )
+            .bind(t)
+            .bind(&now)
+            .fetch_optional(pool.get_ref())
+            .await
+            .ok()
+            .flatten();
+
+            match exists {
+                Some(1) => TokenStatus { valid: true, message: "valid" },
+                _ => TokenStatus { valid: false, message: "expired-or-invalid" },
             }
         }
     };
