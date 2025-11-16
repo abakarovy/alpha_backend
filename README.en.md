@@ -1,4 +1,4 @@
-# alpha_backend
+# "Alpha Future" Hackathon, Backend
 Backend service for a business assistant application, built with Rust and Actix Web.
 
 It provides authentication, user profiles, chat with conversation history, simple business analytics, legal pages, and file download capabilities.
