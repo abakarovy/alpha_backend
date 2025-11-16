@@ -10,6 +10,7 @@ pub type ConversationHistory = Arc<Mutex<HashMap<UserId, Vec<Message>>>>;
 pub struct AppState {
     pub conversations: ConversationHistory,
     pub pool: SqlitePool,
+    pub jwt_secret: String
 }
 
 impl AppState {
@@ -17,6 +18,7 @@ impl AppState {
         Self {
             conversations: Arc::new(Mutex::new(HashMap::new())),
             pool,
+            jwt_secret: std::env::var("JWT_SECRET").expect("JWT_SECRET must be set")
         }
     }
 }

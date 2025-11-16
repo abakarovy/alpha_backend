@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse};
 use bcrypt;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 use sqlx;
@@ -7,6 +8,63 @@ use sqlx::Row;
 
 use crate::models::{AuthRequest, User};
 use crate::state::AppState;
+
+#[derive(Deserialize)]
+pub struct TokenCheck {
+    pub token: Option<String>, // empty string → None
+}
+
+#[derive(Serialize)]
+pub struct TokenStatus {
+    pub valid: bool,
+    pub message: &'static str,
+}
+// src/auth.rs
+use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String, // user id
+    pub exp: usize,
+}
+
+/// Returns Ok(claims) if the token is valid, Err(_) otherwise.
+pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let validation = Validation::default();
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_ref()),
+        &validation,
+    )?;
+    Ok(token_data.claims)
+}
+
+pub async fn check_token(
+    body: web::Json<TokenCheck>,
+    app_state: web::Data<crate::AppState>,
+) -> HttpResponse {
+    let status = match &body.token {
+        None => TokenStatus {
+            valid: false,
+            message: "no-token",
+        },
+        Some(t) => {
+            // reuse whatever verify fn you already have
+            match crate::handlers::auth::verify_jwt(t, &app_state.jwt_secret) {
+                Ok(_) => TokenStatus {
+                    valid: true,
+                    message: "valid",
+                },
+                Err(_) => TokenStatus {
+                    valid: false,
+                    message: "expired-or-invalid",
+                },
+            }
+        }
+    };
+
+    HttpResponse::Ok().json(status)
+}
 
 pub async fn register(
     data: web::Json<AuthRequest>,
