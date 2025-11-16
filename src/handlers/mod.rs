@@ -8,6 +8,12 @@ pub mod files;
 use actix_web::HttpResponse;
 use serde_json::json;
 
+pub async fn main() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/html")
+        .body(include_str!("../../assets/index.html"))
+}
+
 pub async fn health_check() -> HttpResponse {
     HttpResponse::Ok().json(json!({
         "status": "OK",

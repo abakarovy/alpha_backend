@@ -32,6 +32,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(NormalizePath::trim())
             .wrap(Cors::permissive())
             .app_data(app_state.clone())
+            .route("/", web::get().to(handlers::main))
             .route("/health", web::get().to(handlers::health_check))
             .route("/api/chat/message", web::post().to(handlers::chat::send_message))
             .route("/api/chat/conversations/{user_id}", web::get().to(handlers::chat::list_conversations))

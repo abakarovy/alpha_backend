@@ -1,0 +1,25 @@
+.w-full {
+    width: 100%;
+    background-color: red;
+}
+
+.p {
+    padding: 12px;
+}
+
+.flex {
+    display: flex;
+}
+
+.flex-col {
+    flex-direction: column;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.justify-center {
+    justify-content: center;
+    justify-items: center;
+}
