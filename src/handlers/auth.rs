@@ -19,6 +19,29 @@ pub struct TokenStatus {
     pub valid: bool,
     pub message: &'static str,
 }
+
+#[derive(Serialize)]
+pub struct UserProfile {
+    pub id: String,
+    pub email: String,
+    pub business_type: String,
+    pub created_at: String,
+    pub full_name: Option<String>,
+    pub nickname: Option<String>,
+    pub phone: Option<String>,
+    pub country: Option<String>,
+    pub gender: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateUserData {
+    pub business_type: Option<String>,
+    pub full_name: Option<String>,
+    pub nickname: Option<String>,
+    pub phone: Option<String>,
+    pub country: Option<String>,
+    pub gender: Option<String>,
+}
 #[derive(Deserialize)]
 pub struct EmailCheckReq {
     pub email: String,
@@ -73,6 +96,150 @@ pub async fn check_token(
     };
 
     HttpResponse::Ok().json(status)
+}
+
+pub async fn get_profile(
+    query: web::Query<TokenCheck>,
+    state: web::Data<AppState>,
+) -> HttpResponse {
+    let token = match &query.token {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            return HttpResponse::Unauthorized().json(json!({
+                "error": "no-token",
+            }));
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let row = sqlx::query(
+        "SELECT u.id, u.email, u.business_type, u.created_at, u.full_name, u.nickname, u.phone, u.country, u.gender\
+         FROM sessions s\
+         JOIN users u ON s.user_id = u.id\
+         WHERE s.token = ? AND (s.expires_at IS NULL OR s.expires_at > ?)\
+         LIMIT 1",
+    )
+    .bind(token)
+    .bind(&now)
+    .fetch_optional(&state.pool)
+    .await;
+
+    let row = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return HttpResponse::Unauthorized().json(json!({
+                "error": "invalid-or-expired-token",
+            }));
+        }
+    };
+
+    let profile = UserProfile {
+        id: row.get::<String, _>("id"),
+        email: row.get::<String, _>("email"),
+        business_type: row.get::<String, _>("business_type"),
+        created_at: row.get::<String, _>("created_at"),
+        full_name: row.try_get::<Option<String>, _>("full_name").unwrap_or(None),
+        nickname: row.try_get::<Option<String>, _>("nickname").unwrap_or(None),
+        phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
+        country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
+        gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
+    };
+
+    HttpResponse::Ok().json(profile)
+}
+
+pub async fn update_profile(
+    query: web::Query<TokenCheck>,
+    state: web::Data<AppState>,
+    data: web::Json<UpdateUserData>,
+) -> HttpResponse {
+    let token = match &query.token {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            return HttpResponse::Unauthorized().json(json!({
+                "error": "no-token",
+            }));
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let update = data.into_inner();
+
+    let result = sqlx::query(
+        "UPDATE users SET
+            business_type = COALESCE(?, business_type),
+            full_name = COALESCE(?, full_name),
+            nickname = COALESCE(?, nickname),
+            phone = COALESCE(?, phone),
+            country = COALESCE(?, country),
+            gender = COALESCE(?, gender)
+         WHERE id = (
+            SELECT user_id FROM sessions
+            WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)
+         )",
+    )
+    .bind(update.business_type.as_deref())
+    .bind(update.full_name.as_deref())
+    .bind(update.nickname.as_deref())
+    .bind(update.phone.as_deref())
+    .bind(update.country.as_deref())
+    .bind(update.gender.as_deref())
+    .bind(token)
+    .bind(&now)
+    .execute(&state.pool)
+    .await;
+
+    let rows_affected = match result {
+        Ok(r) => r.rows_affected(),
+        Err(_) => {
+            return HttpResponse::InternalServerError().json(json!({
+                "error": "update-failed",
+            }));
+        }
+    };
+
+    if rows_affected == 0 {
+        return HttpResponse::Unauthorized().json(json!({
+            "error": "invalid-or-expired-token",
+        }));
+    }
+
+    let row = sqlx::query(
+        "SELECT u.id, u.email, u.business_type, u.created_at, u.full_name, u.nickname, u.phone, u.country, u.gender
+         FROM sessions s
+         JOIN users u ON s.user_id = u.id
+         WHERE s.token = ? AND (s.expires_at IS NULL OR s.expires_at > ?)
+         LIMIT 1",
+    )
+    .bind(token)
+    .bind(&now)
+    .fetch_optional(&state.pool)
+    .await;
+
+    let row = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            return HttpResponse::InternalServerError().json(json!({
+                "error": "reload-failed",
+            }));
+        }
+    };
+
+    let profile = UserProfile {
+        id: row.get::<String, _>("id"),
+        email: row.get::<String, _>("email"),
+        business_type: row.get::<String, _>("business_type"),
+        created_at: row.get::<String, _>("created_at"),
+        full_name: row.try_get::<Option<String>, _>("full_name").unwrap_or(None),
+        nickname: row.try_get::<Option<String>, _>("nickname").unwrap_or(None),
+        phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
+        country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
+        gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
+    };
+
+    HttpResponse::Ok().json(profile)
 }
 
 pub async fn register(

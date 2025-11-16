@@ -40,6 +40,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/auth/login", web::post().to(handlers::auth::login))
             .route("/api/auth/check-user", web::get().to(handlers::auth::email_exists))
             .route("/api/auth/check-token", web::get().to(handlers::auth::check_token))
+            .route("/api/auth/profile", web::get().to(handlers::auth::get_profile))
+            .route("/api/auth/profile", web::put().to(handlers::auth::update_profile))
             .route("/api/analytics/top-trend", web::get().to(handlers::analytics::get_top_trend))
             .route("/api/analytics/top-trend", web::post().to(handlers::analytics::upsert_top_trend))
             .route("/api/analytics/popularity", web::get().to(handlers::analytics::get_popularity_trends))
