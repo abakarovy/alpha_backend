@@ -3,7 +3,7 @@ use bcrypt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
-use sqlx::{self, SqlitePool};
+use sqlx::{self};
 use sqlx::Row;
 
 use crate::models::{AuthRequest, User};
@@ -31,13 +31,13 @@ pub struct EmailCheckRes {
 
 pub async fn email_exists(
     query: web::Query<EmailCheckReq>,
-    pool: web::Data<SqlitePool>,
+    state: web::Data<AppState>,
 ) -> Result<HttpResponse, Error> {
     let exists: bool = sqlx::query_scalar(
     "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)",
     )
     .bind(&query.email)
-    .fetch_one(pool.get_ref())
+    .fetch_one(&state.pool)
     .await
     .map_err(actix_web::error::ErrorInternalServerError)?;
 
@@ -46,7 +46,7 @@ pub async fn email_exists(
 
 pub async fn check_token(
     query: web::Query<TokenCheck>,
-    pool: web::Data<SqlitePool>,
+    state: web::Data<AppState>,
 ) -> HttpResponse {
     let status = match &query.token {
         None => TokenStatus {
@@ -61,7 +61,7 @@ pub async fn check_token(
             )
             .bind(t)
             .bind(&now)
-            .fetch_optional(pool.get_ref())
+            .fetch_optional(&state.pool)
             .await
             .ok()
             .flatten();

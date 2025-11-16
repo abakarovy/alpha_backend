@@ -5,6 +5,8 @@ mod state;
 mod db;
 
 use actix_web::{web, App, HttpServer};
+use actix_web::middleware::NormalizePath;
+use actix_cors::Cors;
 use state::AppState;
 
 #[actix_web::main]
@@ -26,6 +28,8 @@ async fn main() -> std::io::Result<()> {
     
     HttpServer::new(move || {
         App::new()
+            .wrap(NormalizePath::trim())
+            .wrap(Cors::permissive())
             .app_data(app_state.clone())
             .route("/health", web::get().to(handlers::health_check))
             .route("/api/chat/message", web::post().to(handlers::chat::send_message))
