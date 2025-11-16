@@ -1,1 +1,4 @@
-README.en.md[https://github.com/abakarovy/alpha_backend/edit/main/README.en.md]
+# Альфа Будущее Хакатон, Команда "Смайл"
+
+[Документация на Русском 🇷🇺](https://github.com/abakarovy/alpha_backend/edit/main/README.ru.md)
+[English Documentation 🇬🇧](https://github.com/abakarovy/alpha_backend/edit/main/README.en.md)
