@@ -79,7 +79,7 @@ pub async fn check_token(
         Some(t) => {
             let now = chrono::Utc::now().to_rfc3339();
             let exists: Option<i64> = sqlx::query_scalar(
-                "SELECT CASE WHEN EXISTS(\n                    SELECT 1 FROM sessions\n                    WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)\n                ) THEN 1 ELSE 0 END"
+                "SELECT CASE WHEN EXISTS(\n                    SELECT 1 FROM sessions s\n                    JOIN users u ON s.user_id = u.id\n                    WHERE s.token = ? AND (s.expires_at IS NULL OR s.expires_at > ?)\n                ) THEN 1 ELSE 0 END"
             )
             .bind(t)
             .bind(&now)

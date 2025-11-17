@@ -35,6 +35,16 @@ pub async fn send_message(
         Err(_) => "Извините, произошла ошибка при обработке запроса".to_string()
     };
 
+    // Derive a human-readable title for the conversation, preferably from the AI response
+    let title: Option<String> = chat_req.category.clone().or_else(|| {
+        let first_line = ai_response.lines().next().unwrap_or("").trim();
+        if first_line.is_empty() {
+            None
+        } else {
+            Some(first_line.chars().take(80).collect())
+        }
+    });
+
     // Ensure conversation exists or create new
     let pool = &state.pool;
     let conversation_id = if let Some(cid) = chat_req.conversation_id.clone() {
@@ -53,7 +63,6 @@ pub async fn send_message(
             _ => {
                 let new_id = Uuid::new_v4().to_string();
                 let now = chrono::Utc::now().to_rfc3339();
-                let title = chat_req.category.clone();
                 let _ = sqlx::query(
                     "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
                 )
@@ -69,7 +78,6 @@ pub async fn send_message(
     } else {
         let new_id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        let title = chat_req.category.clone();
         let _ = sqlx::query(
             "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
         )
