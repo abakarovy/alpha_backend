@@ -158,6 +158,7 @@ pub async fn list_conversations(
     let rows = sqlx::query(
         "SELECT id, user_id, title, created_at FROM conversations WHERE user_id = ? ORDER BY datetime(created_at) DESC"
     )
+    .bind(&user_id)
     .fetch_all(pool)
     .await;
 
