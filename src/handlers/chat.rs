@@ -221,6 +221,37 @@ pub async fn list_conversations(
     }
 }
 
+pub async fn get_conversation_history(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> HttpResponse {
+    let conversation_id = path.into_inner();
+    let pool = &state.pool;
+    let rows = sqlx::query(
+        "SELECT id, role, content, timestamp FROM messages WHERE conversation_id = ? ORDER BY datetime(timestamp) ASC"
+    )
+    .bind(&conversation_id)
+    .fetch_all(pool)
+    .await;
+
+    match rows {
+        Ok(rs) => {
+            let messages: Vec<MessageRecord> = rs.into_iter().map(|r| MessageRecord {
+                id: r.get::<String, _>("id"),
+                role: r.get::<String, _>("role"),
+                content: r.get::<String, _>("content"),
+                timestamp: r.get::<String, _>("timestamp"),
+            }).collect();
+            HttpResponse::Ok().json(json!({
+                "conversation_id": conversation_id,
+                "messages": messages,
+                "count": messages.len()
+            }))
+        }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ConversationOwner {
     pub user_id: String,
