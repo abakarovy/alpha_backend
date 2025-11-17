@@ -35,15 +35,19 @@ pub async fn send_message(
         Err(_) => "Извините, произошла ошибка при обработке запроса".to_string()
     };
 
-    // Derive a human-readable title for the conversation, preferably from the AI response
-    let title: Option<String> = chat_req.category.clone().or_else(|| {
-        let first_line = ai_response.lines().next().unwrap_or("").trim();
+    // Derive a human-readable title for the conversation purely from the AI response
+    let title: Option<String> = {
+        let first_line = ai_response
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim();
         if first_line.is_empty() {
             None
         } else {
             Some(first_line.chars().take(80).collect())
         }
-    });
+    };
 
     // Ensure conversation exists or create new
     let pool = &state.pool;
