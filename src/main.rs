@@ -36,6 +36,8 @@ async fn main() -> std::io::Result<()> {
             .route("/health", web::get().to(handlers::health_check))
             .route("/api/chat/message", web::post().to(handlers::chat::send_message))
             .route("/api/chat/conversations/{user_id}", web::get().to(handlers::chat::list_conversations))
+            .route("/api/chat/conversations/{conversation_id}", web::delete().to(handlers::chat::delete_conversation))
+            .route("/api/chat/conversations/{conversation_id}/title", web::put().to(handlers::chat::update_conversation_title))
             .route("/api/chat/history/{conversation_id}", web::get().to(handlers::chat::get_conversation_history))
             .route("/api/auth/register", web::post().to(handlers::auth::register))
             .route("/api/auth/login", web::post().to(handlers::auth::login))
