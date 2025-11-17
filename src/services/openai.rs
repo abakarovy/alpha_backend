@@ -102,10 +102,11 @@ fn get_system_prompt(category: &str, business_type: &str) -> String {
     base_prompt.push_str(&format!("Пользователь владеет бизнесом в сфере: {}. ", business_type));
     base_prompt.push_str("Отвечай профессионально и доступно. Давай практические, реализуемые советы. ");
     base_prompt.push_str("Если пользователь просит табличный/файловый отчет (например, Excel/CSV), ");
-    base_prompt.push_str("в КОНЦЕ ответа добавь JSON-инструкцию в блоке ```json с точной схемой: ");
-    base_prompt.push_str("{\n  \"output_format\": \"xlsx|csv\",\n  \"table\": {\n    \"headers\": [string, ...],\n    \"rows\": [[string, ...], ...]\n  }\n} ");
-    base_prompt.push_str("Только одна JSON-структура в конце, без пояснений после блока. ");
-    base_prompt.push_str("Все значения в rows — строки (не формулы). Для xlsx и csv поддерживаются только текстовые значения. ");
+    base_prompt.push_str(" то таблицу строй текстом (в формате | col | col | col |)");
+    // base_prompt.push_str("в КОНЦЕ ответа добавь JSON-инструкцию в блоке ```json с точной схемой: ");
+    // base_prompt.push_str("{\n  \"output_format\": \"xlsx|csv\",\n  \"table\": {\n    \"headers\": [string, ...],\n    \"rows\": [[string, ...], ...]\n  }\n} ");
+    // base_prompt.push_str("Только одна JSON-структура в конце, без пояснений после блока. ");
+    // base_prompt.push_str("Все значения в rows — строки (не формулы). Для xlsx и csv поддерживаются только текстовые значения. ");
     base_prompt.push_str("Отвечай пользователю на языке, на котором он задаёт вопрос. ");
 
     match category {
