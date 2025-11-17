@@ -24,7 +24,7 @@ pub async fn send_message(
         }));
     }
 
-    let ai_response = match openai::generate_response(
+    let raw_ai_response = match openai::generate_response(
         &chat_req.message,
         chat_req.category.as_deref().unwrap_or("general"),
         chat_req.business_type.as_deref().unwrap_or("общий бизнес"),
@@ -35,19 +35,52 @@ pub async fn send_message(
         Err(_) => "Извините, произошла ошибка при обработке запроса".to_string()
     };
 
-    // Derive a human-readable title for the conversation purely from the AI response
-    let title: Option<String> = {
+    // Extract TITLE: ... line from the AI response, if present
+    let mut ai_response = String::new();
+    let mut title: Option<String> = None;
+    {
+        let mut lines = raw_ai_response.lines();
+        if let Some(first) = lines.next() {
+            let trimmed = first.trim();
+            if let Some(rest) = trimmed.strip_prefix("TITLE:") {
+                let t = rest.trim();
+                if !t.is_empty() {
+                    title = Some(t.chars().take(80).collect());
+                }
+                // skip optional blank line after TITLE
+                if let Some(second) = lines.next() {
+                    let second_trimmed = second.trim();
+                    if second_trimmed.is_empty() {
+                        ai_response = lines.collect::<Vec<_>>().join("\n");
+                    } else {
+                        let mut all = Vec::new();
+                        all.push(second);
+                        all.extend(lines);
+                        ai_response = all.join("\n");
+                    }
+                } else {
+                    ai_response.clear();
+                }
+            } else {
+                // No TITLE prefix; keep original content
+                ai_response = raw_ai_response.clone();
+            }
+        } else {
+            ai_response = raw_ai_response.clone();
+        }
+    }
+
+    // Fallback: if no explicit TITLE was provided, derive from first non-empty line
+    if title.is_none() {
         let first_line = ai_response
             .lines()
             .find(|line| !line.trim().is_empty())
             .unwrap_or("")
             .trim();
-        if first_line.is_empty() {
-            None
-        } else {
-            Some(first_line.chars().take(80).collect())
+        if !first_line.is_empty() {
+            title = Some(first_line.chars().take(80).collect());
         }
-    };
+    }
 
     // Ensure conversation exists or create new
     let pool = &state.pool;
@@ -188,35 +221,101 @@ pub async fn list_conversations(
     }
 }
 
-pub async fn get_conversation_history(
+#[derive(Deserialize)]
+pub struct ConversationOwner {
+    pub user_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateConversationTitle {
+    pub user_id: String,
+    pub title: Option<String>,
+}
+
+// Delete a conversation and all its messages, only if it belongs to the given user
+pub async fn delete_conversation(
     path: web::Path<String>,
     state: web::Data<AppState>,
+    body: web::Json<ConversationOwner>,
 ) -> HttpResponse {
     let conversation_id = path.into_inner();
+    let user_id = &body.user_id;
     let pool = &state.pool;
-    let rows = sqlx::query(
-        "SELECT id, role, content, timestamp FROM messages WHERE conversation_id = ? ORDER BY datetime(timestamp) ASC"
+
+    // Ensure the conversation belongs to the user
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
     )
     .bind(&conversation_id)
-    .fetch_all(pool)
-    .await;
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
 
-    match rows {
-        Ok(rs) => {
-            let messages: Vec<MessageRecord> = rs.into_iter().map(|r| MessageRecord {
-                id: r.get::<String, _>("id"),
-                role: r.get::<String, _>("role"),
-                content: r.get::<String, _>("content"),
-                timestamp: r.get::<String, _>("timestamp"),
-            }).collect();
+    match exists {
+        Some(1) => {
+            // Delete messages first due to FK
+            let _ = sqlx::query("DELETE FROM messages WHERE conversation_id = ?")
+                .bind(&conversation_id)
+                .execute(pool)
+                .await;
+
+            let _ = sqlx::query("DELETE FROM conversations WHERE id = ? AND user_id = ?")
+                .bind(&conversation_id)
+                .bind(user_id)
+                .execute(pool)
+                .await;
+
             HttpResponse::Ok().json(json!({
+                "status": "deleted",
                 "conversation_id": conversation_id,
-                "messages": messages,
-                "count": messages.len()
             }))
         }
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        _ => HttpResponse::NotFound().json(json!({
+            "error": "conversation-not-found-or-not-owned",
+        })),
     }
+}
+
+// Update the title of a conversation, only if it belongs to the given user
+pub async fn update_conversation_title(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+    body: web::Json<UpdateConversationTitle>,
+) -> HttpResponse {
+    let conversation_id = path.into_inner();
+    let update = body.into_inner();
+    let pool = &state.pool;
+
+    let result = sqlx::query(
+        "UPDATE conversations SET title = ? WHERE id = ? AND user_id = ?",
+    )
+    .bind(update.title.as_deref())
+    .bind(&conversation_id)
+    .bind(&update.user_id)
+    .execute(pool)
+    .await;
+
+    let rows_affected = match result {
+        Ok(r) => r.rows_affected(),
+        Err(_) => {
+            return HttpResponse::InternalServerError().json(json!({
+                "error": "update-failed",
+            }));
+        }
+    };
+
+    if rows_affected == 0 {
+        return HttpResponse::NotFound().json(json!({
+            "error": "conversation-not-found-or-not-owned",
+        }));
+    }
+
+    HttpResponse::Ok().json(json!({
+        "status": "updated",
+        "conversation_id": conversation_id,
+    }))
 }
 
 #[derive(serde::Deserialize)]
