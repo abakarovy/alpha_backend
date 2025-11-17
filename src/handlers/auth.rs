@@ -99,37 +99,26 @@ pub async fn check_token(
 }
 
 pub async fn get_profile(
-    query: web::Query<TokenCheck>,
+    path: web::Path<String>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
-    let token = match &query.token {
-        Some(t) if !t.is_empty() => t,
-        _ => {
-            return HttpResponse::Unauthorized().json(json!({
-                "error": "no-token",
-            }));
-        }
-    };
-
-    let now = chrono::Utc::now().to_rfc3339();
+    let user_id = path.into_inner();
 
     let row = sqlx::query(
-        "SELECT u.id, u.email, u.business_type, u.created_at, u.full_name, u.nickname, u.phone, u.country, u.gender\
-         FROM sessions s\
-         JOIN users u ON s.user_id = u.id\
-         WHERE s.token = ? AND (s.expires_at IS NULL OR s.expires_at > ?)\
+        "SELECT id, email, business_type, created_at, full_name, nickname, phone, country, gender
+         FROM users
+         WHERE id = ?
          LIMIT 1",
     )
-    .bind(token)
-    .bind(&now)
+    .bind(&user_id)
     .fetch_optional(&state.pool)
     .await;
 
     let row = match row {
         Ok(Some(r)) => r,
         _ => {
-            return HttpResponse::Unauthorized().json(json!({
-                "error": "invalid-or-expired-token",
+            return HttpResponse::NotFound().json(json!({
+                "error": "user-not-found",
             }));
         }
     };
