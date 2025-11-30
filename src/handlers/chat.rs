@@ -1,10 +1,11 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::models::{ChatRequest, ChatResponse, QuickAdviceRequest, MessageRecord, ConversationSummary, FileAttachment, TableSpec};
 use crate::state::AppState;
 use crate::services::openai;
+use crate::i18n::{self, Locale};
 use sqlx::Row;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -13,26 +14,120 @@ use std::io::Cursor;
 use serde::Deserialize;
 
 pub async fn send_message(
+    req: HttpRequest,
     data: web::Json<ChatRequest>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
     let chat_req = data.into_inner();
     
+    // Detect locale: priority: request field -> query param -> Accept-Language header -> default EN
+    let locale = if let Some(lang) = chat_req.language.as_ref() {
+        match lang.to_lowercase().as_str() {
+            "ru" | "ru-ru" => Locale::Ru,
+            _ => Locale::En,
+        }
+    } else {
+        i18n::detect_locale(&req)
+    };
+    
     if chat_req.message.is_empty() || chat_req.user_id.is_empty() {
+        let error_msg = match locale {
+            Locale::Ru => "Требуются сообщение и user_id",
+            Locale::En => "Message and user_id are required",
+        };
         return HttpResponse::BadRequest().json(json!({
-            "error": "Message and user_id are required"
+            "error": error_msg
         }));
     }
+
+    // Get locale-aware defaults
+    let default_business_type = match locale {
+        Locale::Ru => "общий бизнес",
+        Locale::En => "general business",
+    };
+    
+    let error_message = match locale {
+        Locale::Ru => "Извините, произошла ошибка при обработке запроса",
+        Locale::En => "Sorry, an error occurred while processing your request",
+    };
+
+    // Ensure conversation exists or create new (needed to get conversation_id for history retrieval)
+    let pool = &state.pool;
+    let conversation_id = if let Some(cid) = chat_req.conversation_id.clone() {
+        // Validate conversation belongs to user
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
+        )
+        .bind(&cid)
+        .bind(&chat_req.user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        match exists {
+            Some(1) => cid,
+            _ => {
+                let new_id = Uuid::new_v4().to_string();
+                let now = chrono::Utc::now().to_rfc3339();
+                let _ = sqlx::query(
+                    "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
+                )
+                .bind(&new_id)
+                .bind(&chat_req.user_id)
+                .bind::<Option<String>>(None)
+                .bind(&now)
+                .execute(pool)
+                .await;
+                new_id
+            }
+        }
+    } else {
+        let new_id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = sqlx::query(
+            "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&new_id)
+        .bind(&chat_req.user_id)
+        .bind::<Option<String>>(None)
+        .bind(&now)
+        .execute(pool)
+        .await;
+        new_id
+    };
+
+    // Retrieve conversation history from this conversation (all previous messages)
+    let conversation_history = {
+        let history_rows = sqlx::query(
+            "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY datetime(timestamp) ASC"
+        )
+        .bind(&conversation_id)
+        .fetch_all(pool)
+        .await
+        .ok();
+        
+        history_rows.map(|rows| {
+            rows.into_iter()
+                .map(|r| {
+                    let role: String = r.get("role");
+                    let content: String = r.get("content");
+                    (role, content)
+                })
+                .collect()
+        })
+    };
 
     let raw_ai_response = match openai::generate_response(
         &chat_req.message,
         chat_req.category.as_deref().unwrap_or("general"),
-        chat_req.business_type.as_deref().unwrap_or("общий бизнес"),
+        chat_req.business_type.as_deref().unwrap_or(default_business_type),
         &state,
-        &chat_req.user_id
+        &chat_req.user_id,
+        locale,
+        conversation_history,
     ).await {
         Ok(response) => response,
-        Err(_) => "Извините, произошла ошибка при обработке запроса".to_string()
+        Err(_) => error_message.to_string()
     };
 
     // Extract TITLE: ... line from the AI response, if present
@@ -82,50 +177,16 @@ pub async fn send_message(
         }
     }
 
-    // Ensure conversation exists or create new
-    let pool = &state.pool;
-    let conversation_id = if let Some(cid) = chat_req.conversation_id.clone() {
-        // Validate conversation belongs to user
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
-        )
-        .bind(&cid)
-        .bind(&chat_req.user_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-        match exists {
-            Some(1) => cid,
-            _ => {
-                let new_id = Uuid::new_v4().to_string();
-                let now = chrono::Utc::now().to_rfc3339();
-                let _ = sqlx::query(
-                    "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
-                )
-                .bind(&new_id)
-                .bind(&chat_req.user_id)
-                .bind(&title)
-                .bind(&now)
-                .execute(pool)
-                .await;
-                new_id
-            }
-        }
-    } else {
-        let new_id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+    // Update conversation title if we have one and it's a new conversation
+    if let Some(ref title_str) = title {
         let _ = sqlx::query(
-            "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
+            "UPDATE conversations SET title = ? WHERE id = ? AND (title IS NULL OR title = '')"
         )
-        .bind(&new_id)
-        .bind(&chat_req.user_id)
-        .bind(&title)
-        .bind(&now)
+        .bind(title_str)
+        .bind(&conversation_id)
         .execute(pool)
         .await;
-        new_id
-    };
+    }
 
     let user_msg_id = Uuid::new_v4().to_string();
     let now1 = chrono::Utc::now().to_rfc3339();
@@ -155,16 +216,26 @@ pub async fn send_message(
     .execute(pool)
     .await;
 
-    // Optionally generate a file attachment
     let mut files: Vec<FileAttachment> = Vec::new();
-    // Priority: client hint -> AI intent extracted from response
     let (mut fmt_opt, mut table_opt) = (chat_req.output_format.clone(), chat_req.table.clone());
+    
     if fmt_opt.is_none() || table_opt.is_none() {
         if let Some((f, t)) = extract_file_intent(&ai_response) {
             fmt_opt = Some(f);
             table_opt = Some(t);
         }
     }
+    
+    if table_opt.is_none() {
+        if let Some(table) = parse_markdown_table(&ai_response) {
+            table_opt = Some(table);
+            // Detect format from user message if not already set
+            if fmt_opt.is_none() {
+                fmt_opt = Some(detect_format_from_message(&chat_req.message));
+            }
+        }
+    }
+    
     if let (Some(fmt), Some(table)) = (fmt_opt.as_deref(), table_opt.as_ref()) {
         match generate_file_and_store(pool, fmt, table).await {
             Ok(att) => files.push(att),
@@ -195,6 +266,7 @@ pub async fn get_quick_advice(
 }
 
 pub async fn list_conversations(
+    _req: HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
@@ -222,6 +294,7 @@ pub async fn list_conversations(
 }
 
 pub async fn get_conversation_history(
+    _req: HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
@@ -265,6 +338,7 @@ pub struct UpdateConversationTitle {
 
 // Delete a conversation and all its messages, only if it belongs to the given user
 pub async fn delete_conversation(
+    req: HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
     body: web::Json<ConversationOwner>,
@@ -283,6 +357,12 @@ pub async fn delete_conversation(
     .await
     .ok()
     .flatten();
+
+    let locale = i18n::detect_locale(&req);
+    let error_msg = match locale {
+        Locale::Ru => "Разговор не найден или не принадлежит пользователю",
+        Locale::En => "conversation-not-found-or-not-owned",
+    };
 
     match exists {
         Some(1) => {
@@ -304,13 +384,14 @@ pub async fn delete_conversation(
             }))
         }
         _ => HttpResponse::NotFound().json(json!({
-            "error": "conversation-not-found-or-not-owned",
+            "error": error_msg,
         })),
     }
 }
 
 // Update the title of a conversation, only if it belongs to the given user
 pub async fn update_conversation_title(
+    req: HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
     body: web::Json<UpdateConversationTitle>,
@@ -318,6 +399,7 @@ pub async fn update_conversation_title(
     let conversation_id = path.into_inner();
     let update = body.into_inner();
     let pool = &state.pool;
+    let locale = i18n::detect_locale(&req);
 
     let result = sqlx::query(
         "UPDATE conversations SET title = ? WHERE id = ? AND user_id = ?",
@@ -331,15 +413,23 @@ pub async fn update_conversation_title(
     let rows_affected = match result {
         Ok(r) => r.rows_affected(),
         Err(_) => {
+            let error_msg = match locale {
+                Locale::Ru => "Ошибка обновления",
+                Locale::En => "update-failed",
+            };
             return HttpResponse::InternalServerError().json(json!({
-                "error": "update-failed",
+                "error": error_msg,
             }));
         }
     };
 
     if rows_affected == 0 {
+        let error_msg = match locale {
+            Locale::Ru => "Разговор не найден или не принадлежит пользователю",
+            Locale::En => "conversation-not-found-or-not-owned",
+        };
         return HttpResponse::NotFound().json(json!({
-            "error": "conversation-not-found-or-not-owned",
+            "error": error_msg,
         }));
     }
 
@@ -356,17 +446,23 @@ struct FileIntent {
 }
 
 fn extract_file_intent(text: &str) -> Option<(String, TableSpec)> {
-    let cleaned = text
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```");
-
-    if let Ok(intent) = serde_json::from_str::<FileIntent>(cleaned) {
-        return Some((intent.output_format, intent.table));
+    // First, try to extract JSON from code blocks (```json ... ``` or ``` ... ```)
+    let json_block_markers = ["```json", "```"];
+    
+    for marker in json_block_markers.iter() {
+        if let Some(start_idx) = text.find(marker) {
+            let after_marker = &text[start_idx + marker.len()..];
+            if let Some(end_idx) = after_marker.find("```") {
+                let json_content = after_marker[..end_idx].trim();
+                if let Ok(intent) = serde_json::from_str::<FileIntent>(json_content) {
+                    return Some((intent.output_format, intent.table));
+                }
+            }
+        }
     }
-
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
+    
+    // Try to find JSON object in the text (looking for the last occurrence, likely at the end)
+    if let (Some(start), Some(end)) = (text.rfind('{'), text.rfind('}')) {
         if start < end {
             let slice = &text[start..=end];
             if let Ok(intent) = serde_json::from_str::<FileIntent>(slice) {
@@ -374,7 +470,83 @@ fn extract_file_intent(text: &str) -> Option<(String, TableSpec)> {
             }
         }
     }
+    
     None
+}
+
+fn parse_markdown_table(text: &str) -> Option<TableSpec> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut table_lines: Vec<&str> = Vec::new();
+    let mut in_table = false;
+    
+    // Find table boundaries (lines starting with |)
+    for line in &lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with('|') && trimmed.ends_with('|') {
+            in_table = true;
+            table_lines.push(trimmed);
+        } else if in_table && !trimmed.starts_with('|') {
+            // End of table
+            break;
+        }
+    }
+    
+    if table_lines.len() < 2 {
+        return None; // Need at least header and separator
+    }
+    
+    // Parse header (first line)
+    let header_line = table_lines[0];
+    let headers: Vec<String> = header_line
+        .split('|')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    
+    if headers.is_empty() {
+        return None;
+    }
+    
+    // Skip separator line (second line, usually |---|---|)
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    
+    // Parse data rows (starting from third line)
+    for line in table_lines.iter().skip(2) {
+        let cells: Vec<String> = line
+            .split('|')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        
+        if cells.len() == headers.len() {
+            rows.push(cells);
+        } else if cells.len() > 0 {
+            // Try to pad or truncate to match header count
+            let mut adjusted_cells = cells;
+            while adjusted_cells.len() < headers.len() {
+                adjusted_cells.push(String::new());
+            }
+            adjusted_cells.truncate(headers.len());
+            rows.push(adjusted_cells);
+        }
+    }
+    
+    if rows.is_empty() {
+        return None;
+    }
+    
+    Some(TableSpec { headers, rows })
+}
+
+fn detect_format_from_message(message: &str) -> String {
+    let msg_lower = message.to_lowercase();
+    if msg_lower.contains("csv") || msg_lower.contains("comma-separated") || msg_lower.contains(".csv") {
+        "csv".to_string()
+    } else if msg_lower.contains("excel") || msg_lower.contains("xlsx") || msg_lower.contains(".xlsx") || msg_lower.contains("spreadsheet") {
+        "xlsx".to_string()
+    } else {
+        "xlsx".to_string() // Default to Excel
+    }
 }
 
 async fn generate_file_and_store(pool: &sqlx::SqlitePool, fmt: &str, table: &TableSpec) -> Result<FileAttachment, Box<dyn std::error::Error>> {

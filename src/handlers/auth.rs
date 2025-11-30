@@ -1,4 +1,4 @@
-use actix_web::{Error, HttpResponse, web};
+use actix_web::{Error, HttpRequest, HttpResponse, web};
 use bcrypt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -8,6 +8,7 @@ use sqlx::Row;
 
 use crate::models::{AuthRequest, User};
 use crate::state::AppState;
+use crate::i18n::{self, Locale};
 
 #[derive(Deserialize)]
 pub struct TokenCheck {
@@ -53,6 +54,7 @@ pub struct EmailCheckRes {
 }
 
 pub async fn email_exists(
+    _req: HttpRequest,
     query: web::Query<EmailCheckReq>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, Error> {
@@ -68,6 +70,7 @@ pub async fn email_exists(
 }
 
 pub async fn check_token(
+    _req: HttpRequest,
     query: web::Query<TokenCheck>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
@@ -99,6 +102,7 @@ pub async fn check_token(
 }
 
 pub async fn get_profile(
+    req: HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
@@ -114,11 +118,16 @@ pub async fn get_profile(
     .fetch_optional(&state.pool)
     .await;
 
+    let locale = i18n::detect_locale(&req);
     let row = match row {
         Ok(Some(r)) => r,
         _ => {
+            let error_msg = match locale {
+                Locale::Ru => "Пользователь не найден",
+                Locale::En => "user-not-found",
+            };
             return HttpResponse::NotFound().json(json!({
-                "error": "user-not-found",
+                "error": error_msg,
             }));
         }
     };
@@ -139,15 +148,21 @@ pub async fn get_profile(
 }
 
 pub async fn update_profile(
+    req: HttpRequest,
     query: web::Query<TokenCheck>,
     state: web::Data<AppState>,
     data: web::Json<UpdateUserData>,
 ) -> HttpResponse {
+    let locale = i18n::detect_locale(&req);
     let token = match &query.token {
         Some(t) if !t.is_empty() => t,
         _ => {
+            let error_msg = match locale {
+                Locale::Ru => "Токен не предоставлен",
+                Locale::En => "no-token",
+            };
             return HttpResponse::Unauthorized().json(json!({
-                "error": "no-token",
+                "error": error_msg,
             }));
         }
     };
@@ -183,15 +198,23 @@ pub async fn update_profile(
     let rows_affected = match result {
         Ok(r) => r.rows_affected(),
         Err(_) => {
+            let error_msg = match locale {
+                Locale::Ru => "Ошибка обновления",
+                Locale::En => "update-failed",
+            };
             return HttpResponse::InternalServerError().json(json!({
-                "error": "update-failed",
+                "error": error_msg,
             }));
         }
     };
 
     if rows_affected == 0 {
+        let error_msg = match locale {
+            Locale::Ru => "Недействительный или истекший токен",
+            Locale::En => "invalid-or-expired-token",
+        };
         return HttpResponse::Unauthorized().json(json!({
-            "error": "invalid-or-expired-token",
+            "error": error_msg,
         }));
     }
 
@@ -210,8 +233,12 @@ pub async fn update_profile(
     let row = match row {
         Ok(Some(r)) => r,
         _ => {
+            let error_msg = match locale {
+                Locale::Ru => "Ошибка перезагрузки профиля",
+                Locale::En => "reload-failed",
+            };
             return HttpResponse::InternalServerError().json(json!({
-                "error": "reload-failed",
+                "error": error_msg,
             }));
         }
     };
@@ -232,11 +259,13 @@ pub async fn update_profile(
 }
 
 pub async fn register(
+    req: HttpRequest,
     data: web::Json<AuthRequest>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
     let auth_req = data.into_inner();
     let pool = &state.pool;
+    let locale = i18n::detect_locale(&req);
 
     // check existing user
     if let Ok(existing) = sqlx::query_scalar::<_, i64>(
@@ -247,17 +276,27 @@ pub async fn register(
     .await
     {
         if existing > 0 {
+            let error_msg = match locale {
+                Locale::Ru => "Пользователь уже существует",
+                Locale::En => "User already exists",
+            };
             return HttpResponse::BadRequest().json(json!({
-                "error": "User already exists"
+                "error": error_msg
             }));
         }
     }
     
     let hashed_password = match bcrypt::hash(&auth_req.password, bcrypt::DEFAULT_COST) {
         Ok(hash) => hash,
-        Err(_) => return HttpResponse::InternalServerError().json(json!({
-            "error": "Password hashing failed"
-        }))
+        Err(_) => {
+            let error_msg = match locale {
+                Locale::Ru => "Ошибка хеширования пароля",
+                Locale::En => "Password hashing failed",
+            };
+            return HttpResponse::InternalServerError().json(json!({
+                "error": error_msg
+            }));
+        }
     };
     
     let user = User {
@@ -289,7 +328,11 @@ pub async fn register(
     .execute(pool)
     .await
     {
-        return HttpResponse::InternalServerError().json(json!({"error": "Failed to create user"}));
+        let error_msg = match locale {
+            Locale::Ru => "Не удалось создать пользователя",
+            Locale::En => "Failed to create user",
+        };
+        return HttpResponse::InternalServerError().json(json!({"error": error_msg}));
     }
 
     // create session token
@@ -308,8 +351,12 @@ pub async fn register(
     .execute(pool)
     .await;
     
+    let success_msg = match locale {
+        Locale::Ru => "Пользователь успешно зарегистрирован",
+        Locale::En => "User registered successfully",
+    };
     HttpResponse::Created().json(json!({
-        "message": "User registered successfully",
+        "message": success_msg,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -320,11 +367,13 @@ pub async fn register(
 }
 
 pub async fn login(
+    req: HttpRequest,
     data: web::Json<AuthRequest>,
     state: web::Data<AppState>,
 ) -> HttpResponse {
     let auth_req = data.into_inner();
     let pool = &state.pool;
+    let locale = i18n::detect_locale(&req);
 
     let row = sqlx::query(
         "SELECT id, email, password, business_type, created_at, full_name, nickname, phone, country, gender FROM users WHERE email = ? LIMIT 1"
@@ -336,8 +385,12 @@ pub async fn login(
     let row = match row {
         Ok(Some(r)) => r,
         _ => {
+            let error_msg = match locale {
+                Locale::Ru => "Неверные учетные данные",
+                Locale::En => "Invalid credentials",
+            };
             return HttpResponse::Unauthorized().json(json!({
-                "error": "Invalid credentials"
+                "error": error_msg
             }));
         }
     };
@@ -361,8 +414,12 @@ pub async fn login(
     };
     
     if !is_valid {
+        let error_msg = match locale {
+            Locale::Ru => "Неверные учетные данные",
+            Locale::En => "Invalid credentials",
+        };
         return HttpResponse::Unauthorized().json(json!({
-            "error": "Invalid credentials"
+            "error": error_msg
         }));
     }
 
@@ -382,8 +439,12 @@ pub async fn login(
     .execute(pool)
     .await;
 
+    let success_msg = match locale {
+        Locale::Ru => "Вход выполнен успешно",
+        Locale::En => "Login successful",
+    };
     HttpResponse::Ok().json(json!({
-        "message": "Login successful",
+        "message": success_msg,
         "user": {
             "id": user.id,
             "email": user.email,

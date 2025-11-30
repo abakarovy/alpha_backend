@@ -213,5 +213,65 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    // Support chat tables
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            message TEXT NOT NULL,
+            photo_url TEXT,
+            direction TEXT NOT NULL CHECK(direction IN ('user', 'support')),
+            telegram_message_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS device_tokens (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            fcm_token TEXT NOT NULL,
+            platform TEXT,
+            device_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+            UNIQUE(user_id, fcm_token)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS message_mapping (
+            id TEXT PRIMARY KEY,
+            telegram_message_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            support_message_id TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+            FOREIGN KEY(support_message_id) REFERENCES support_messages(id)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS greetings_sent (
+            user_id TEXT PRIMARY KEY,
+            date TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     Ok(pool)
 }

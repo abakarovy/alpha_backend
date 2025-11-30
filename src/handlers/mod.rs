@@ -4,6 +4,7 @@ pub mod business;
 pub mod analytics;
 pub mod legal;
 pub mod files;
+pub mod support;
 
 use actix_web::HttpResponse;
 use serde_json::json;

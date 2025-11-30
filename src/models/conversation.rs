@@ -16,6 +16,7 @@ pub struct ChatRequest {
     pub conversation_id: Option<String>,
     pub output_format: Option<String>, // e.g. "xlsx" | "csv"
     pub table: Option<TableSpec>,
+    pub language: Option<String>, // e.g. "en" | "ru"
 }
 
 #[derive(Debug, Serialize, Deserialize)]
