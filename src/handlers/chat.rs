@@ -237,7 +237,7 @@ pub async fn send_message(
     }
     
     if let (Some(fmt), Some(table)) = (fmt_opt.as_deref(), table_opt.as_ref()) {
-        match generate_file_and_store(pool, fmt, table).await {
+        match generate_file_and_store(pool, fmt, table, Some(&asst_msg_id)).await {
             Ok(att) => files.push(att),
             Err(_) => { /* ignore file errors to not break chat */ }
         }
@@ -309,16 +309,70 @@ pub async fn get_conversation_history(
 
     match rows {
         Ok(rs) => {
-            let messages: Vec<MessageRecord> = rs.into_iter().map(|r| MessageRecord {
+            let messages: Vec<MessageRecord> = rs
+                .into_iter()
+                .map(|r| MessageRecord {
                 id: r.get::<String, _>("id"),
                 role: r.get::<String, _>("role"),
                 content: r.get::<String, _>("content"),
                 timestamp: r.get::<String, _>("timestamp"),
-            }).collect();
+                })
+                .collect();
+
+            // For each message, load associated files (if any)
+            let mut files_by_message: Vec<serde_json::Value> = Vec::new();
+            for msg in &messages {
+                let file_rows = sqlx::query(
+                    "SELECT id, filename, mime, size, bytes FROM files WHERE message_id = ?"
+                )
+                .bind(&msg.id)
+                .fetch_all(pool)
+                .await;
+
+                if let Ok(frs) = file_rows {
+                    if frs.is_empty() {
+                        continue;
+                    }
+
+                    let mut attachments: Vec<FileAttachment> = Vec::new();
+                    for fr in frs {
+                        let id = fr.get::<String, _>("id");
+                        let filename = fr.get::<String, _>("filename");
+                        let mime = fr.get::<String, _>("mime");
+                        let size = fr.get::<i64, _>("size") as usize;
+                        let bytes: Vec<u8> = fr.get("bytes");
+
+                        let content_base64 = if size <= 1024 * 1024 {
+                            Some(B64.encode(&bytes))
+                        } else {
+                            None
+                        };
+                        let download_url = Some(format!("/api/files/{}", id));
+
+                        attachments.push(FileAttachment {
+                            id: Some(id),
+                            filename,
+                            mime,
+                            size,
+                            content_base64,
+                            download_url,
+                        });
+                    }
+
+                    if !attachments.is_empty() {
+                        files_by_message.push(json!({
+                            "message_id": msg.id,
+                            "files": attachments,
+                        }));
+                    }
+                }
+            }
+
             HttpResponse::Ok().json(json!({
                 "conversation_id": conversation_id,
                 "messages": messages,
-                "count": messages.len()
+                "count": messages.len(),
+                "attachments": files_by_message,
             }))
         }
         Err(_) => HttpResponse::InternalServerError().finish(),
@@ -455,12 +509,12 @@ fn extract_file_intent(text: &str) -> Option<(String, TableSpec)> {
             if let Some(end_idx) = after_marker.find("```") {
                 let json_content = after_marker[..end_idx].trim();
                 if let Ok(intent) = serde_json::from_str::<FileIntent>(json_content) {
-                    return Some((intent.output_format, intent.table));
+        return Some((intent.output_format, intent.table));
                 }
             }
         }
     }
-    
+
     // Try to find JSON object in the text (looking for the last occurrence, likely at the end)
     if let (Some(start), Some(end)) = (text.rfind('{'), text.rfind('}')) {
         if start < end {
@@ -549,7 +603,12 @@ fn detect_format_from_message(message: &str) -> String {
     }
 }
 
-async fn generate_file_and_store(pool: &sqlx::SqlitePool, fmt: &str, table: &TableSpec) -> Result<FileAttachment, Box<dyn std::error::Error>> {
+async fn generate_file_and_store(
+    pool: &sqlx::SqlitePool,
+    fmt: &str,
+    table: &TableSpec,
+    message_id: Option<&str>,
+) -> Result<FileAttachment, Box<dyn std::error::Error>> {
     let (filename, mime, bytes) = match fmt.to_ascii_lowercase().as_str() {
         "xlsx" => {
             let mut wb = Workbook::new();
@@ -590,13 +649,14 @@ async fn generate_file_and_store(pool: &sqlx::SqlitePool, fmt: &str, table: &Tab
     let size = bytes.len();
     let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO files (id, filename, mime, size, bytes) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO files (id, filename, mime, size, bytes, message_id) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
     .bind(&filename)
     .bind(&mime)
     .bind(size as i64)
     .bind(bytes.clone())
+    .bind(message_id)
     .execute(pool)
     .await?;
 

@@ -213,6 +213,11 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    // Add optional message_id column to link files with messages (if not present)
+    let _ = sqlx::query("ALTER TABLE files ADD COLUMN message_id TEXT;")
+        .execute(&pool)
+        .await;
+
     // Support chat tables
     sqlx::query(
         r#"
