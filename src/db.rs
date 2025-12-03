@@ -1,5 +1,129 @@
 use sqlx::{sqlite::{SqlitePoolOptions, SqliteConnectOptions}, SqlitePool};
 use std::str::FromStr;
+use uuid::Uuid;
+
+async fn seed_analytics_data(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Calculate week start (Monday of current week) - same logic as handlers
+    let now = chrono::Utc::now();
+    let week_start = now.date_naive().week(chrono::Weekday::Mon).first_day();
+    let week_start_str = week_start.format("%Y-%m-%d").to_string();
+    
+    // Calculate month start (1st day of current month) - same logic as handlers
+    let today = now.date_naive();
+    let formatted = today.format("%Y-%m-%d").to_string();
+    let month_start_str = format!("{}-01", &formatted[..7]);
+    
+    // Check if weekly trends already exist for this week
+    let existing_weekly: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM top_weekly_trends WHERE week_start = ?"
+    )
+    .bind(&week_start_str)
+    .fetch_optional(pool)
+    .await?
+    .and_then(|count: i64| if count > 0 { Some(count) } else { None });
+    
+    if existing_weekly.is_none() {
+        // Insert current top trend (position 1)
+        let top_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO top_weekly_trends (id, week_start, position, title, increase, request_percent) VALUES (?, ?, 1, ?, ?, ?)"
+        )
+        .bind(&top_id)
+        .bind(&week_start_str)
+        .bind("Gaming laptops")
+        .bind(92.0)
+        .bind(Some(18.0))
+        .execute(pool)
+        .await?;
+        
+        // Insert second place (position 2)
+        let second_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO top_weekly_trends (id, week_start, position, title, increase, request_percent) VALUES (?, ?, 2, ?, ?, ?)"
+        )
+        .bind(&second_id)
+        .bind(&week_start_str)
+        .bind("Online education")
+        .bind(76.0)
+        .bind(None::<f64>)
+        .execute(pool)
+        .await?;
+        
+        // Insert geo trends (top 3)
+        let geo_countries = vec![("Belgium", 54.0, 1), ("Netherlands", 48.0, 2), ("Germany", 42.0, 3)];
+        for (country, increase, rank) in geo_countries {
+            let geo_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO geo_trends (id, week_start, country, increase, rank) VALUES (?, ?, ?, ?, ?)"
+            )
+            .bind(&geo_id)
+            .bind(&week_start_str)
+            .bind(country)
+            .bind(increase)
+            .bind(rank as i64)
+            .execute(pool)
+            .await?;
+        }
+    }
+    
+    // Check if AI analytics already exist
+    let existing_ai: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ai_analytics"
+    )
+    .fetch_optional(pool)
+    .await?
+    .and_then(|count: i64| if count > 0 { Some(count) } else { None });
+    
+    if existing_ai.is_none() {
+        let ai_id = Uuid::new_v4().to_string();
+        let competitiveness_json = serde_json::to_string(&vec![25.5, 30.2, 35.8, 28.4, 32.1, 40.0, 38.7])
+            .unwrap_or_else(|_| "[]".to_string());
+        
+        sqlx::query(
+            "INSERT INTO ai_analytics (id, increase, description, level_of_competitiveness) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&ai_id)
+        .bind(10.0)
+        .bind("Online education trend can be used to increase the brand as a source of benefit")
+        .bind(&competitiveness_json)
+        .execute(pool)
+        .await?;
+    }
+    
+    // Check if niches already exist for this month
+    let existing_niches: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM niches_month WHERE month_start = ?"
+    )
+    .bind(&month_start_str)
+    .fetch_optional(pool)
+    .await?
+    .and_then(|count: i64| if count > 0 { Some(count) } else { None });
+    
+    if existing_niches.is_none() {
+        let niches = vec![
+            ("Beauty", 34.0),
+            ("Food Delivery", -6.0),
+            ("Fitness", 28.5),
+            ("Travel", -12.3),
+            ("Technology", 45.2),
+        ];
+        
+        for (title, change) in niches {
+            let niche_id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO niches_month (id, month_start, title, change) VALUES (?, ?, ?, ?)"
+            )
+            .bind(&niche_id)
+            .bind(&month_start_str)
+            .bind(title)
+            .bind(change)
+            .execute(pool)
+            .await?;
+        }
+    }
+    
+    Ok(())
+}
 
 pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let connect_opts = SqliteConnectOptions::from_str(database_url)?
@@ -150,6 +274,9 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
+
+    // Seed preset data for new analytics endpoints using Rust date calculations
+    seed_analytics_data(&pool).await?;
 
     // Keep old tables for backward compatibility (can be removed later if not needed)
     sqlx::query(
