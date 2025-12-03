@@ -252,18 +252,6 @@ pub async fn send_message(
     })
 }
 
-pub async fn get_quick_advice(
-    query: web::Query<QuickAdviceRequest>,
-) -> HttpResponse {
-    let advice = openai::generate_quick_advice(&query.category, &query.business_type).await;
-    
-    HttpResponse::Ok().json(json!({
-        "category": query.category,
-        "business_type": query.business_type,
-        "advice": advice,
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    }))
-}
 
 pub async fn list_conversations(
     _req: HttpRequest,
