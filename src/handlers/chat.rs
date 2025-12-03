@@ -20,7 +20,6 @@ pub async fn send_message(
 ) -> HttpResponse {
     let chat_req = data.into_inner();
     
-    // Detect locale: priority: request field -> query param -> Accept-Language header -> default EN
     let locale = if let Some(lang) = chat_req.language.as_ref() {
         match lang.to_lowercase().as_str() {
             "ru" | "ru-ru" => Locale::Ru,
@@ -40,7 +39,6 @@ pub async fn send_message(
         }));
     }
 
-    // Get locale-aware defaults
     let default_business_type = match locale {
         Locale::Ru => "общий бизнес",
         Locale::En => "general business",
@@ -51,7 +49,6 @@ pub async fn send_message(
         Locale::En => "Sorry, an error occurred while processing your request",
     };
 
-    // Ensure conversation exists or create new (needed to get conversation_id for history retrieval)
     let pool = &state.pool;
     let conversation_id = if let Some(cid) = chat_req.conversation_id.clone() {
         // Validate conversation belongs to user
@@ -96,7 +93,6 @@ pub async fn send_message(
         new_id
     };
 
-    // Retrieve conversation history from this conversation (all previous messages)
     let conversation_history = {
         let history_rows = sqlx::query(
             "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY datetime(timestamp) ASC"
@@ -130,7 +126,6 @@ pub async fn send_message(
         Err(_) => error_message.to_string()
     };
 
-    // Extract TITLE: ... line from the AI response, if present
     let mut ai_response = String::new();
     let mut title: Option<String> = None;
     {
@@ -142,7 +137,6 @@ pub async fn send_message(
                 if !t.is_empty() {
                     title = Some(t.chars().take(80).collect());
                 }
-                // skip optional blank line after TITLE
                 if let Some(second) = lines.next() {
                     let second_trimmed = second.trim();
                     if second_trimmed.is_empty() {
@@ -157,7 +151,6 @@ pub async fn send_message(
                     ai_response.clear();
                 }
             } else {
-                // No TITLE prefix; keep original content
                 ai_response = raw_ai_response.clone();
             }
         } else {
@@ -165,7 +158,6 @@ pub async fn send_message(
         }
     }
 
-    // Fallback: if no explicit TITLE was provided, derive from first non-empty line
     if title.is_none() {
         let first_line = ai_response
             .lines()
@@ -177,7 +169,6 @@ pub async fn send_message(
         }
     }
 
-    // Update conversation title if we have one and it's a new conversation
     if let Some(ref title_str) = title {
         let _ = sqlx::query(
             "UPDATE conversations SET title = ? WHERE id = ? AND (title IS NULL OR title = '')"
@@ -378,7 +369,6 @@ pub struct UpdateConversationTitle {
     pub title: Option<String>,
 }
 
-// Delete a conversation and all its messages, only if it belongs to the given user
 pub async fn delete_conversation(
     req: HttpRequest,
     path: web::Path<String>,
@@ -389,7 +379,6 @@ pub async fn delete_conversation(
     let user_id = &body.user_id;
     let pool = &state.pool;
 
-    // Ensure the conversation belongs to the user
     let exists: Option<i64> = sqlx::query_scalar(
         "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
     )
@@ -431,7 +420,6 @@ pub async fn delete_conversation(
     }
 }
 
-// Update the title of a conversation, only if it belongs to the given user
 pub async fn update_conversation_title(
     req: HttpRequest,
     path: web::Path<String>,
@@ -534,7 +522,7 @@ fn parse_markdown_table(text: &str) -> Option<TableSpec> {
     }
     
     if table_lines.len() < 2 {
-        return None; // Need at least header and separator
+        return None;
     }
     
     // Parse header (first line)
@@ -587,7 +575,7 @@ fn detect_format_from_message(message: &str) -> String {
     } else if msg_lower.contains("excel") || msg_lower.contains("xlsx") || msg_lower.contains(".xlsx") || msg_lower.contains("spreadsheet") {
         "xlsx".to_string()
     } else {
-        "xlsx".to_string() // Default to Excel
+        "xlsx".to_string()
     }
 }
 

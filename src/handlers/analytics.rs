@@ -1,11 +1,338 @@
 use actix_web::{web, HttpResponse, HttpRequest};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use uuid::Uuid;
 
 use crate::state::AppState;
 use crate::i18n;
 
-// --------- DTOs ---------
+// ========== TOP WEEKLY TRENDS ==========
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TopTrendItem {
+    pub title: String,
+    pub increase: f64, // e.g., 92.0 for +92%
+    pub request_percent: Option<f64>, // Only for position 1
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GeoTrendItem {
+    pub country: String,
+    pub increase: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WeeklyTrendsUpsert {
+    pub current_top: TopTrendItem,
+    pub second_place: TopTrendItem,
+    pub geo_trends: Vec<GeoTrendItem>, // Top 3 regions
+}
+
+#[derive(Debug, Serialize)]
+pub struct WeeklyTrendsResponse {
+    pub current_top: TopTrendItem,
+    pub second_place: TopTrendItem,
+    pub geo_trends: Vec<GeoTrendItem>,
+    pub week_start: String,
+}
+
+// ========== AI ANALYTICS ==========
+
+#[derive(Debug, Deserialize)]
+pub struct AiAnalyticsUpsert {
+    pub increase: f64,
+    pub description: String,
+    pub level_of_competitiveness: Vec<f64>, // Array of at least 5 values for graph
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiAnalyticsResponse {
+    pub increase: f64,
+    pub description: String,
+    pub level_of_competitiveness: Vec<f64>,
+    pub created_at: String,
+}
+
+// ========== NICHES OF THE MONTH ==========
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct NicheItem {
+    pub title: String,
+    pub change: f64, // e.g., 34.0 for +34%, -6.0 for -6%
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NichesMonthUpsert {
+    pub niches: Vec<NicheItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NichesMonthResponse {
+    pub niches: Vec<NicheItem>,
+    pub month_start: String,
+}
+
+// ========== HANDLERS ==========
+
+pub async fn get_weekly_trends(_req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
+    let pool = &state.pool;
+    
+    // Get current week start (Monday of current week)
+    let now = chrono::Utc::now();
+    let week_start = now.date_naive().week(chrono::Weekday::Mon).first_day();
+    let week_start_str = week_start.format("%Y-%m-%d").to_string();
+    
+    // Get top trend (position 1)
+    let top_row = sqlx::query(
+        "SELECT title, increase, request_percent FROM top_weekly_trends WHERE week_start = ? AND position = 1 LIMIT 1"
+    )
+    .bind(&week_start_str)
+    .fetch_optional(pool)
+    .await;
+    
+    // Get 2nd place (position 2)
+    let second_row = sqlx::query(
+        "SELECT title, increase, request_percent FROM top_weekly_trends WHERE week_start = ? AND position = 2 LIMIT 1"
+    )
+    .bind(&week_start_str)
+    .fetch_optional(pool)
+    .await;
+    
+    // Get geo trends (top 3)
+    let geo_rows = sqlx::query(
+        "SELECT country, increase FROM geo_trends WHERE week_start = ? ORDER BY rank ASC LIMIT 3"
+    )
+    .bind(&week_start_str)
+    .fetch_all(pool)
+    .await;
+    
+    match (top_row, second_row, geo_rows) {
+        (Ok(Some(top_r)), Ok(Some(second_r)), Ok(geo_rs)) => {
+            let current_top = TopTrendItem {
+                title: top_r.get("title"),
+                increase: top_r.get("increase"),
+                request_percent: top_r.try_get("request_percent").ok().flatten(),
+            };
+            
+            let second_place = TopTrendItem {
+                title: second_r.get("title"),
+                increase: second_r.get("increase"),
+                request_percent: second_r.try_get("request_percent").ok().flatten(),
+            };
+            
+            let geo_trends: Vec<GeoTrendItem> = geo_rs.into_iter().map(|r| GeoTrendItem {
+                country: r.get("country"),
+                increase: r.get("increase"),
+            }).collect();
+            
+            HttpResponse::Ok().json(WeeklyTrendsResponse {
+                current_top,
+                second_place,
+                geo_trends,
+                week_start: week_start_str,
+            })
+        }
+        _ => HttpResponse::Ok().json(serde_json::json!({}))
+    }
+}
+
+pub async fn upsert_weekly_trends(_req: HttpRequest, body: web::Json<WeeklyTrendsUpsert>, state: web::Data<AppState>) -> HttpResponse {
+    let data = body.into_inner();
+    let pool = &state.pool;
+    
+    // Calculate week start
+    let now = chrono::Utc::now();
+    let week_start = now.date_naive().week(chrono::Weekday::Mon).first_day();
+    let week_start_str = week_start.format("%Y-%m-%d").to_string();
+    
+    // Ensure only top 3 geo trends
+    let geo_trends: Vec<GeoTrendItem> = data.geo_trends.into_iter().take(3).collect();
+    
+    // Delete existing entries for this week
+    let _ = sqlx::query("DELETE FROM top_weekly_trends WHERE week_start = ?")
+        .bind(&week_start_str)
+        .execute(pool)
+        .await;
+    
+    let _ = sqlx::query("DELETE FROM geo_trends WHERE week_start = ?")
+        .bind(&week_start_str)
+        .execute(pool)
+        .await;
+    
+    // Insert current top trend
+    let top_id = Uuid::new_v4().to_string();
+    let _ = sqlx::query(
+        "INSERT INTO top_weekly_trends (id, week_start, position, title, increase, request_percent) VALUES (?, ?, 1, ?, ?, ?)"
+    )
+    .bind(&top_id)
+    .bind(&week_start_str)
+    .bind(&data.current_top.title)
+    .bind(data.current_top.increase)
+    .bind(data.current_top.request_percent)
+    .execute(pool)
+    .await;
+    
+    // Insert second place
+    let second_id = Uuid::new_v4().to_string();
+    let _ = sqlx::query(
+        "INSERT INTO top_weekly_trends (id, week_start, position, title, increase, request_percent) VALUES (?, ?, 2, ?, ?, ?)"
+    )
+    .bind(&second_id)
+    .bind(&week_start_str)
+    .bind(&data.second_place.title)
+    .bind(data.second_place.increase)
+    .bind(data.second_place.request_percent)
+    .execute(pool)
+    .await;
+    
+    // Insert geo trends
+    for (idx, geo) in geo_trends.iter().enumerate() {
+        let geo_id = Uuid::new_v4().to_string();
+        let rank = (idx + 1) as i64;
+        let _ = sqlx::query(
+            "INSERT INTO geo_trends (id, week_start, country, increase, rank) VALUES (?, ?, ?, ?, ?)"
+        )
+        .bind(&geo_id)
+        .bind(&week_start_str)
+        .bind(&geo.country)
+        .bind(geo.increase)
+        .bind(rank)
+        .execute(pool)
+        .await;
+    }
+    
+    HttpResponse::Ok().json(serde_json::json!({"status": "ok"}))
+}
+
+pub async fn get_ai_analytics(_req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
+    let pool = &state.pool;
+    
+    let row = sqlx::query(
+        "SELECT increase, description, level_of_competitiveness, created_at FROM ai_analytics ORDER BY created_at DESC LIMIT 1"
+    )
+    .fetch_optional(pool)
+    .await;
+    
+    match row {
+        Ok(Some(r)) => {
+            let competitiveness_json: String = r.get("level_of_competitiveness");
+            let competitiveness: Vec<f64> = serde_json::from_str(&competitiveness_json)
+                .unwrap_or_else(|_| vec![]);
+            
+            HttpResponse::Ok().json(AiAnalyticsResponse {
+                increase: r.get("increase"),
+                description: r.get("description"),
+                level_of_competitiveness: competitiveness,
+                created_at: r.get("created_at"),
+            })
+        }
+        _ => HttpResponse::Ok().json(serde_json::json!({}))
+    }
+}
+
+pub async fn upsert_ai_analytics(_req: HttpRequest, body: web::Json<AiAnalyticsUpsert>, state: web::Data<AppState>) -> HttpResponse {
+    let data = body.into_inner();
+    let pool = &state.pool;
+    
+    // Ensure at least 5 data points
+    if data.level_of_competitiveness.len() < 5 {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "level_of_competitiveness must have at least 5 data points"
+        }));
+    }
+    
+    let competitiveness_json = serde_json::to_string(&data.level_of_competitiveness)
+        .unwrap_or_else(|_| "[]".to_string());
+    
+    let id = Uuid::new_v4().to_string();
+    
+    let result = sqlx::query(
+        "INSERT INTO ai_analytics (id, increase, description, level_of_competitiveness) VALUES (?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(data.increase)
+    .bind(&data.description)
+    .bind(&competitiveness_json)
+    .execute(pool)
+    .await;
+    
+    match result {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"status": "ok"})),
+        Err(_) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "Failed to save AI analytics"
+        }))
+    }
+}
+
+pub async fn get_niches_month(_req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
+    let pool = &state.pool;
+    
+    // Get current month start (first day of current month)
+    let now = chrono::Utc::now();
+    let today = now.date_naive();
+    let formatted = today.format("%Y-%m-%d").to_string();
+    let month_start_str = format!("{}-01", &formatted[..7]); // Extract YYYY-MM and append -01
+    
+    let rows = sqlx::query(
+        "SELECT title, change FROM niches_month WHERE month_start = ? ORDER BY ABS(change) DESC"
+    )
+    .bind(&month_start_str)
+    .fetch_all(pool)
+    .await;
+    
+    match rows {
+        Ok(rs) => {
+            let niches: Vec<NicheItem> = rs.into_iter().map(|r| NicheItem {
+                title: r.get("title"),
+                change: r.get("change"),
+            }).collect();
+            
+            HttpResponse::Ok().json(NichesMonthResponse {
+                niches,
+                month_start: month_start_str,
+            })
+        }
+        _ => HttpResponse::Ok().json(NichesMonthResponse {
+            niches: vec![],
+            month_start: month_start_str,
+        })
+    }
+}
+
+pub async fn upsert_niches_month(_req: HttpRequest, body: web::Json<NichesMonthUpsert>, state: web::Data<AppState>) -> HttpResponse {
+    let data = body.into_inner();
+    let pool = &state.pool;
+    
+    // Get current month start (first day of current month)
+    let now = chrono::Utc::now();
+    let today = now.date_naive();
+    let formatted = today.format("%Y-%m-%d").to_string();
+    let month_start_str = format!("{}-01", &formatted[..7]); // Extract YYYY-MM and append -01
+    
+    // Delete existing entries for this month
+    let _ = sqlx::query("DELETE FROM niches_month WHERE month_start = ?")
+        .bind(&month_start_str)
+        .execute(pool)
+        .await;
+    
+    // Insert new niches
+    for niche in data.niches {
+        let id = Uuid::new_v4().to_string();
+        let _ = sqlx::query(
+            "INSERT INTO niches_month (id, month_start, title, change) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&id)
+        .bind(&month_start_str)
+        .bind(&niche.title)
+        .bind(niche.change)
+        .execute(pool)
+        .await;
+    }
+    
+    HttpResponse::Ok().json(serde_json::json!({"status": "ok"}))
+}
+
+// Keep old endpoints for backward compatibility (can be removed later)
 #[derive(Debug, Deserialize)]
 pub struct TopTrendUpsert {
     pub name: String,
@@ -26,7 +353,7 @@ pub struct TopTrend {
 #[derive(Debug, Deserialize)]
 pub struct PopularityUpsert {
     pub name: String,
-    pub direction: String, // 'growing' | 'decreasing'
+    pub direction: String,
     pub percent_change: Option<f64>,
     pub notes: Option<String>,
 }
@@ -80,7 +407,6 @@ pub async fn upsert_top_trend(req: HttpRequest, body: web::Json<TopTrendUpsert>,
     let loc = i18n::detect_locale(&req);
     let locale = match loc { i18n::Locale::Ru => "ru", _ => "en" };
 
-    // Upsert base numeric fields into base table (name, percent_change)
     let base_res = sqlx::query(
         "INSERT INTO analytics_trends (name, percent_change, description, why_popular) VALUES (?, ?, COALESCE(?, description), COALESCE(?, why_popular)) \
          ON CONFLICT(name) DO UPDATE SET \
@@ -96,7 +422,6 @@ pub async fn upsert_top_trend(req: HttpRequest, body: web::Json<TopTrendUpsert>,
 
     if base_res.is_err() { return HttpResponse::InternalServerError().finish(); }
 
-    // Upsert localized text into i18n table for the detected locale
     let _ = sqlx::query(
         "INSERT INTO analytics_trends_i18n (name, locale, description, why_popular) VALUES (?, ?, ?, ?) \
          ON CONFLICT(name, locale) DO UPDATE SET \
@@ -155,7 +480,6 @@ pub async fn upsert_popularity_trend(req: HttpRequest, body: web::Json<Popularit
     let loc = i18n::detect_locale(&req);
     let locale = match loc { i18n::Locale::Ru => "ru", _ => "en" };
 
-    // Upsert base fields (direction, percent_change). Keep base notes if provided as fallback.
     let base_res = sqlx::query(
         "INSERT INTO popularity_trends (name, direction, percent_change, notes) VALUES (?, ?, ?, COALESCE(?, notes)) \
          ON CONFLICT(name) DO UPDATE SET \
@@ -172,7 +496,6 @@ pub async fn upsert_popularity_trend(req: HttpRequest, body: web::Json<Popularit
 
     if base_res.is_err() { return HttpResponse::InternalServerError().finish(); }
 
-    // Upsert localized notes into i18n table
     let _ = sqlx::query(
         "INSERT INTO popularity_trends_i18n (name, locale, notes) VALUES (?, ?, ?) \
          ON CONFLICT(name, locale) DO UPDATE SET \

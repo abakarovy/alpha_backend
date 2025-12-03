@@ -50,24 +50,19 @@ impl FcmService {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let client = Client::new();
         
-        // Try to load service account from environment variable (for hosting services)
-        // or from file path
         let service_account = if let Ok(json_str) = env::var("FCM_SERVICE_ACCOUNT_JSON") {
             // Service account JSON as environment variable (base64 encoded or plain JSON)
             let json_content = if json_str.starts_with('{') {
                 json_str
             } else {
-                // Assume it's base64 encoded
                 String::from_utf8(general_purpose::STANDARD
                     .decode(&json_str)?)?
             };
             Some(serde_json::from_str::<ServiceAccount>(&json_content)?)
         } else if let Ok(file_path) = env::var("FCM_SERVICE_ACCOUNT_PATH") {
-            // Service account JSON file path
             let json_content = std::fs::read_to_string(&file_path)?;
             Some(serde_json::from_str::<ServiceAccount>(&json_content)?)
         } else if let Ok(google_creds) = env::var("GOOGLE_APPLICATION_CREDENTIALS") {
-            // Standard Google Cloud environment variable
             let json_content = std::fs::read_to_string(&google_creds)?;
             Some(serde_json::from_str::<ServiceAccount>(&json_content)?)
         } else {
@@ -92,21 +87,18 @@ impl FcmService {
             }
         };
 
-        // Check if we have a valid cached token
         {
             let token_lock = self.access_token.lock().unwrap();
             if let Some((token, expiry)) = &*token_lock {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)?
                     .as_secs();
-                // Refresh token if it expires in less than 5 minutes
                 if *expiry > now + 300 {
                     return Ok(token.clone());
                 }
             }
         }
 
-        // Create JWT assertion
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)?
             .as_secs();
@@ -119,13 +111,10 @@ impl FcmService {
             iat: now,
         };
 
-        // Parse private key (PEM format) - jsonwebtoken can handle the PEM directly
         let encoding_key = EncodingKey::from_rsa_pem(service_account.private_key.as_bytes())?;
 
-        // Encode JWT
         let jwt = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)?;
 
-        // Exchange JWT for access token
         let token_response: TokenResponse = self.client
             .post(&service_account.token_uri)
             .form(&[
@@ -137,7 +126,6 @@ impl FcmService {
             .json()
             .await?;
 
-        // Cache the token
         let expiry = now + token_response.expires_in;
         {
             let mut token_lock = self.access_token.lock().unwrap();
@@ -164,7 +152,6 @@ impl FcmService {
 
         let access_token = self.get_access_token().await?;
 
-        // Use FCM v1 API
         let url = format!("https://fcm.googleapis.com/v1/projects/{}/messages:send", project_id);
 
         for token in tokens {
@@ -186,7 +173,6 @@ impl FcmService {
                 message["message"]["data"] = data_obj;
             }
 
-            // Send notification (best effort)
             let response = self.client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", access_token))

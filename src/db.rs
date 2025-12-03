@@ -84,6 +84,74 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    // New analytics tables structure
+    
+    // Top weekly trends: stores current top trend, 2nd place, and geo trends
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS top_weekly_trends (
+            id TEXT PRIMARY KEY,
+            week_start TEXT NOT NULL,
+            position INTEGER NOT NULL CHECK(position IN (1, 2)),
+            title TEXT NOT NULL,
+            increase REAL NOT NULL,
+            request_percent REAL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            UNIQUE(week_start, position)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Geo trends: top 3 regions per week
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS geo_trends (
+            id TEXT PRIMARY KEY,
+            week_start TEXT NOT NULL,
+            country TEXT NOT NULL,
+            increase REAL NOT NULL,
+            rank INTEGER NOT NULL CHECK(rank IN (1, 2, 3)),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            UNIQUE(week_start, rank)
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // AI analytics
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_analytics (
+            id TEXT PRIMARY KEY,
+            increase REAL,
+            description TEXT,
+            level_of_competitiveness TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Niches of the month
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS niches_month (
+            id TEXT PRIMARY KEY,
+            month_start TEXT NOT NULL,
+            title TEXT NOT NULL,
+            change REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Keep old tables for backward compatibility (can be removed later if not needed)
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS analytics_trends (
