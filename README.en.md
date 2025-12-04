@@ -43,12 +43,28 @@ It provides authentication, user profiles, chat with conversation history, simpl
     - Returns the message history for a specific conversation.
 
 - **Analytics**
+  - `GET /api/analytics/weekly-trends`
+  - `POST /api/analytics/weekly-trends`
+    - Get or upsert weekly trends for the current week:
+      - Top trend (1st place) with title, increase percentage, and request percentage
+      - 2nd place with title and increase percentage
+      - Top 3 geographic trends (country and increase percentage)
+  - `GET /api/analytics/ai-analytics`
+  - `POST /api/analytics/ai-analytics`
+    - Get or create AI analytics data:
+      - Increase percentage
+      - Trend description
+      - Array of competitiveness level data points (minimum 5 values for graph)
+  - `GET /api/analytics/niches-month`
+  - `POST /api/analytics/niches-month`
+    - Get or upsert niches for the current month:
+      - Array of niches with title and change percentage (positive = growth, negative = decline)
   - `GET /api/analytics/top-trend`
   - `POST /api/analytics/top-trend`
-    - Get or upsert a “top trend” analytics record.
+    - Get or upsert a "top trend" analytics record (legacy, for backward compatibility).
   - `GET /api/analytics/popularity`
   - `POST /api/analytics/popularity`
-    - Get or upsert popularity trend records.
+    - Get or upsert popularity trend records (legacy, for backward compatibility).
 
 - **Files**
   - `GET /api/files/{id}`
@@ -165,6 +181,76 @@ Content-Type: application/json
   "full_name": "New Name",
   "phone": "+123456789",
   "country": "US"
+}
+```
+
+### Get Weekly Trends
+
+```http
+GET /api/analytics/weekly-trends
+```
+
+### Upsert Weekly Trends
+
+```http
+POST /api/analytics/weekly-trends
+Content-Type: application/json
+
+{
+  "current_top": {
+    "title": "Gaming laptops",
+    "increase": 92.0,
+    "request_percent": 18.0
+  },
+  "second_place": {
+    "title": "Online education",
+    "increase": 76.0
+  },
+  "geo_trends": [
+    { "country": "Belgium", "increase": 54.0 },
+    { "country": "Netherlands", "increase": 48.0 },
+    { "country": "Germany", "increase": 42.0 }
+  ]
+}
+```
+
+### Get AI Analytics
+
+```http
+GET /api/analytics/ai-analytics
+```
+
+### Create AI Analytics
+
+```http
+POST /api/analytics/ai-analytics
+Content-Type: application/json
+
+{
+  "increase": 10.0,
+  "description": "Online education trend can be used to increase the brand as a source of benefit",
+  "level_of_competitiveness": [25.5, 30.2, 35.8, 28.4, 32.1, 40.0, 38.7]
+}
+```
+
+### Get Niches of the Month
+
+```http
+GET /api/analytics/niches-month
+```
+
+### Upsert Niches of the Month
+
+```http
+POST /api/analytics/niches-month
+Content-Type: application/json
+
+{
+  "niches": [
+    { "title": "Beauty", "change": 34.0 },
+    { "title": "Food Delivery", "change": -6.0 },
+    { "title": "Fitness", "change": 28.5 }
+  ]
 }
 ```
 

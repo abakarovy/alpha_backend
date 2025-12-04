@@ -44,12 +44,28 @@
     - Возвращает историю сообщений для конкретного диалога.
 
 - **Аналитика**
+  - `GET /api/analytics/weekly-trends`
+  - `POST /api/analytics/weekly-trends`
+    - Получение или сохранение (upsert) трендов текущей недели:
+      - Топ тренд (1-е место) с названием, процентом роста и процентом запросов
+      - 2-е место с названием и процентом роста
+      - Топ 3 географических тренда (страна и процент роста)
+  - `GET /api/analytics/ai-analytics`
+  - `POST /api/analytics/ai-analytics`
+    - Получение или сохранение AI-аналитики:
+      - Процент роста
+      - Описание тренда
+      - Массив данных уровня конкурентоспособности (минимум 5 значений для графика)
+  - `GET /api/analytics/niches-month`
+  - `POST /api/analytics/niches-month`
+    - Получение или сохранение (upsert) ниш текущего месяца:
+      - Массив ниш с названием и процентом изменения (положительный = рост, отрицательный = снижение)
   - `GET /api/analytics/top-trend`
   - `POST /api/analytics/top-trend`
-    - Получение или сохранение (upsert) записи о «главном тренде».
+    - Получение или сохранение (upsert) записи о «главном тренде» (legacy, для обратной совместимости).
   - `GET /api/analytics/popularity`
   - `POST /api/analytics/popularity`
-    - Получение или сохранение (upsert) записей о трендах популярности.
+    - Получение или сохранение (upsert) записей о трендах популярности (legacy, для обратной совместимости).
 
 - **Файлы**
   - `GET /api/files/{id}`
@@ -166,6 +182,76 @@ Content-Type: application/json
   "full_name": "New Name",
   "phone": "+123456789",
   "country": "US"
+}
+```
+
+### Получение трендов недели
+
+```http
+GET /api/analytics/weekly-trends
+```
+
+### Сохранение трендов недели
+
+```http
+POST /api/analytics/weekly-trends
+Content-Type: application/json
+
+{
+  "current_top": {
+    "title": "Gaming laptops",
+    "increase": 92.0,
+    "request_percent": 18.0
+  },
+  "second_place": {
+    "title": "Online education",
+    "increase": 76.0
+  },
+  "geo_trends": [
+    { "country": "Belgium", "increase": 54.0 },
+    { "country": "Netherlands", "increase": 48.0 },
+    { "country": "Germany", "increase": 42.0 }
+  ]
+}
+```
+
+### Получение AI-аналитики
+
+```http
+GET /api/analytics/ai-analytics
+```
+
+### Сохранение AI-аналитики
+
+```http
+POST /api/analytics/ai-analytics
+Content-Type: application/json
+
+{
+  "increase": 10.0,
+  "description": "Online education trend can be used to increase the brand as a source of benefit",
+  "level_of_competitiveness": [25.5, 30.2, 35.8, 28.4, 32.1, 40.0, 38.7]
+}
+```
+
+### Получение ниш месяца
+
+```http
+GET /api/analytics/niches-month
+```
+
+### Сохранение ниш месяца
+
+```http
+POST /api/analytics/niches-month
+Content-Type: application/json
+
+{
+  "niches": [
+    { "title": "Beauty", "change": 34.0 },
+    { "title": "Food Delivery", "change": -6.0 },
+    { "title": "Fitness", "change": 28.5 }
+  ]
 }
 ```
 
