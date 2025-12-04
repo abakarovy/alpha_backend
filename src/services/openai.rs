@@ -1,5 +1,6 @@
 use crate::state::AppState;
 use crate::i18n::Locale;
+use crate::models::ConversationContext;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -39,11 +40,12 @@ pub async fn generate_response(
     _user_id: &str,
     locale: Locale,
     conversation_history: Option<Vec<(String, String)>>, // Vec of (role, content) pairs
+    context: ConversationContext,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")?;
     let model = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "openrouter/auto".to_string());
     
-    let system_prompt = get_system_prompt(category, business_type, locale);
+    let system_prompt = get_system_prompt_with_context(category, business_type, &context, locale);
 
     // Build messages array: system prompt + conversation history + current message
     let mut messages: Vec<ChatMessage> = vec![
@@ -111,18 +113,73 @@ pub async fn generate_response(
     Ok(content)
 }
 
-fn get_system_prompt(category: &str, business_type: &str, locale: Locale) -> String {
+fn get_system_prompt_with_context(
+    category: &str,
+    business_type: &str,
+    context: &ConversationContext,
+    locale: Locale,
+) -> String {
     match locale {
-        Locale::Ru => get_system_prompt_ru(category, business_type),
-        Locale::En => get_system_prompt_en(category, business_type),
+        Locale::Ru => get_system_prompt_ru_with_context(category, business_type, context),
+        Locale::En => get_system_prompt_en_with_context(category, business_type, context),
     }
 }
 
-fn get_system_prompt_ru(category: &str, business_type: &str) -> String {
+fn get_system_prompt_ru_with_context(category: &str, business_type: &str, context: &ConversationContext) -> String {
     let mut base_prompt = String::new();
     base_prompt.push_str("Ты - опытный бизнес-консультант, помогающий владельцам малого бизнеса. ");
-    base_prompt.push_str(&format!("Пользователь владеет бизнесом в сфере: {}. ", business_type));
-    base_prompt.push_str("Отвечай профессионально и доступно. Давай практические, реализуемые советы. ");
+    
+    // Контекст пользователя
+    if let Some(ref role) = context.user_role {
+        let role_desc = match role.as_str() {
+            "owner" => "владелец бизнеса",
+            "marketer" => "маркетолог",
+            "accountant" => "бухгалтер",
+            "beginner" => "начинающий предприниматель",
+            _ => "владелец бизнеса",
+        };
+        base_prompt.push_str(&format!("Пользователь - {}. ", role_desc));
+    }
+    
+    if let Some(ref stage) = context.business_stage {
+        let stage_desc = match stage.as_str() {
+            "startup" => "только запускается",
+            "stable" => "имеет стабильный доход",
+            "scaling" => "хочет масштабироваться",
+            _ => "имеет стабильный доход",
+        };
+        base_prompt.push_str(&format!("Этап бизнеса: {}. ", stage_desc));
+    }
+    
+    base_prompt.push_str(&format!("Сфера бизнеса: {}. ", business_type));
+    
+    if let Some(ref niche) = context.business_niche {
+        base_prompt.push_str(&format!("Ниша: {}. ", niche));
+    }
+    
+    if let Some(ref goal) = context.goal {
+        let goal_desc = match goal.as_str() {
+            "increase_revenue" => "увеличить выручку",
+            "reduce_costs" => "сократить расходы",
+            "hire_staff" => "нанять сотрудников",
+            "launch_ads" => "запустить рекламу",
+            "legal_help" => "решить юридический вопрос",
+            _ => goal,
+        };
+        base_prompt.push_str(&format!("Цель текущего запроса: {}. ", goal_desc));
+    }
+    
+    if let Some(ref region) = context.region {
+        base_prompt.push_str(&format!("Регион: {}. Учитывай местные особенности законодательства и рынка. ", region));
+    }
+    
+    if let Some(ref urgency) = context.urgency {
+        if urgency == "urgent" {
+            base_prompt.push_str("Это срочный вопрос, требуется быстрый практический ответ. ");
+        }
+    }
+    
+    base_prompt.push_str("Отвечай профессионально и доступно. Давай практические, реализуемые советы с учетом контекста пользователя. ");
 
     base_prompt.push_str("Если пользователь не просил таблицу, не выдавай её. ");
     
@@ -140,17 +197,67 @@ fn get_system_prompt_ru(category: &str, business_type: &str) -> String {
 
     match category {
         "legal" => format!("{}Консультируй по юридическим вопросам: регистрация, налоги, договоры, трудовое право. Важно: уточняй, что это общие рекомендации и нужно консультироваться с юристом.", base_prompt),
-        "marketing" => format!("{}Помогай с маркетингом: продвижение, SMM, таргетинг, брендинг, аналитика. Давай конкретные инструменты и стратегии.", base_prompt),
+        "marketing" => format!("{}Помогай с маркетингом: продвижение, SMM, таргетинг, брендинг, аналитика. Давай конкретные инструменты и стратегии с учетом ниши и этапа бизнеса.", base_prompt),
         "finance" => format!("{}Консультируй по финансам: учет, планирование, оптимизация расходов, налоговая оптимизация. Предлагай практические методы финансового управления.", base_prompt),
         _ => format!("{}Помогай с общими бизнес-вопросами: управление, найм, масштабирование, клиентский сервис.", base_prompt)
     }
 }
 
-fn get_system_prompt_en(category: &str, business_type: &str) -> String {
+fn get_system_prompt_en_with_context(category: &str, business_type: &str, context: &ConversationContext) -> String {
     let mut base_prompt = String::new();
     base_prompt.push_str("You are an experienced business consultant helping small business owners. ");
+    
+    // User context
+    if let Some(ref role) = context.user_role {
+        let role_desc = match role.as_str() {
+            "owner" => "business owner",
+            "marketer" => "marketer",
+            "accountant" => "accountant",
+            "beginner" => "beginning entrepreneur",
+            _ => "business owner",
+        };
+        base_prompt.push_str(&format!("The user is a {}. ", role_desc));
+    }
+    
+    if let Some(ref stage) = context.business_stage {
+        let stage_desc = match stage.as_str() {
+            "startup" => "just starting out",
+            "stable" => "has stable income",
+            "scaling" => "wants to scale",
+            _ => "has stable income",
+        };
+        base_prompt.push_str(&format!("Business stage: {}. ", stage_desc));
+    }
+    
     base_prompt.push_str(&format!("The user owns a business in: {}. ", business_type));
-    base_prompt.push_str("Answer professionally and clearly. Give practical, actionable advice. ");
+    
+    if let Some(ref niche) = context.business_niche {
+        base_prompt.push_str(&format!("Niche: {}. ", niche));
+    }
+    
+    if let Some(ref goal) = context.goal {
+        let goal_desc = match goal.as_str() {
+            "increase_revenue" => "increase revenue",
+            "reduce_costs" => "reduce costs",
+            "hire_staff" => "hire staff",
+            "launch_ads" => "launch advertising",
+            "legal_help" => "solve a legal issue",
+            _ => goal,
+        };
+        base_prompt.push_str(&format!("Current request goal: {}. ", goal_desc));
+    }
+    
+    if let Some(ref region) = context.region {
+        base_prompt.push_str(&format!("Region: {}. Consider local legislation and market characteristics. ", region));
+    }
+    
+    if let Some(ref urgency) = context.urgency {
+        if urgency == "urgent" {
+            base_prompt.push_str("This is an urgent question, requires a quick practical answer. ");
+        }
+    }
+    
+    base_prompt.push_str("Answer professionally and clearly. Give practical, actionable advice considering the user's context. ");
     base_prompt.push_str("If the user requests a table/file report (e.g., Excel/CSV), ");
     base_prompt.push_str(" build the table as text (in format | col | col | col |) for display in the response. ");
     base_prompt.push_str("If the user did not request a table, do not provide one. ");

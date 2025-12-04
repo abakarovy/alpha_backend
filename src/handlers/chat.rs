@@ -2,7 +2,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::models::{ChatRequest, ChatResponse, QuickAdviceRequest, MessageRecord, ConversationSummary, FileAttachment, TableSpec};
+use crate::models::{ChatRequest, ChatResponse, MessageRecord, ConversationSummary, FileAttachment, TableSpec, ConversationContext, ContextFilters, CreateConversationRequest};
 use crate::state::AppState;
 use crate::services::openai;
 use crate::i18n::{self, Locale};
@@ -75,6 +75,12 @@ pub async fn send_message(
                 .bind(&now)
                 .execute(pool)
                 .await;
+                
+                // Сохранить контекст, если передан
+                if let Some(ref ctx) = chat_req.context_filters {
+                    let _ = save_conversation_context(pool, &new_id, ctx).await;
+                }
+                
                 new_id
             }
         }
@@ -90,8 +96,19 @@ pub async fn send_message(
         .bind(&now)
         .execute(pool)
         .await;
+        
+        // Сохранить контекст, если передан
+        if let Some(ref ctx) = chat_req.context_filters {
+            let _ = save_conversation_context(pool, &new_id, ctx).await;
+        }
+        
         new_id
     };
+    
+    // Получить контекст для использования в промпте
+    let conversation_context = get_conversation_context(pool, &conversation_id).await;
+    let user_base_context = get_user_base_context(pool, &chat_req.user_id).await;
+    let final_context = merge_contexts(user_base_context, conversation_context, chat_req.context_filters.clone());
 
     let conversation_history = {
         let history_rows = sqlx::query(
@@ -121,6 +138,7 @@ pub async fn send_message(
         &chat_req.user_id,
         locale,
         conversation_history,
+        final_context,
     ).await {
         Ok(response) => response,
         Err(_) => error_message.to_string()
@@ -244,6 +262,68 @@ pub async fn send_message(
 }
 
 
+pub async fn create_conversation(
+    _req: HttpRequest,
+    data: web::Json<CreateConversationRequest>,
+    state: web::Data<AppState>,
+) -> HttpResponse {
+    let pool = &state.pool;
+    let conversation_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    
+    // Создать беседу
+    let _ = sqlx::query(
+        "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
+    )
+    .bind(&conversation_id)
+    .bind(&data.user_id)
+    .bind(&data.title)
+    .bind(&now)
+    .execute(pool)
+    .await;
+    
+    // Сохранить контекст беседы, если передан
+    if let Some(ref context) = data.context {
+        let _ = save_conversation_context(pool, &conversation_id, context).await;
+    }
+    
+    HttpResponse::Ok().json(json!({
+        "conversation_id": conversation_id,
+        "created_at": now
+    }))
+}
+
+pub async fn update_conversation_context(
+    _req: HttpRequest,
+    path: web::Path<String>,
+    data: web::Json<ContextFilters>,
+    state: web::Data<AppState>,
+) -> HttpResponse {
+    let conversation_id = path.into_inner();
+    let pool = &state.pool;
+    
+    // Проверить существование беседы
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ?) THEN 1 ELSE 0 END"
+    )
+    .bind(&conversation_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    
+    match exists {
+        Some(1) => {
+            let result = save_conversation_context(pool, &conversation_id, &data.into_inner()).await;
+            match result {
+                Ok(_) => HttpResponse::Ok().json(json!({"status": "ok"})),
+                Err(_) => HttpResponse::InternalServerError().json(json!({"error": "Failed to update context"})),
+            }
+        }
+        _ => HttpResponse::NotFound().json(json!({"error": "Conversation not found"})),
+    }
+}
+
 pub async fn list_conversations(
     _req: HttpRequest,
     path: web::Path<String>,
@@ -252,7 +332,15 @@ pub async fn list_conversations(
     let user_id = path.into_inner();
     let pool = &state.pool;
     let rows = sqlx::query(
-        "SELECT id, user_id, title, created_at FROM conversations WHERE user_id = ? ORDER BY datetime(created_at) DESC"
+        r#"
+        SELECT 
+            c.id, c.user_id, c.title, c.created_at,
+            ctx.user_role, ctx.business_stage, ctx.goal, ctx.urgency, ctx.region, ctx.business_niche
+        FROM conversations c
+        LEFT JOIN conversation_context ctx ON c.id = ctx.conversation_id
+        WHERE c.user_id = ? 
+        ORDER BY datetime(c.created_at) DESC
+        "#
     )
     .bind(&user_id)
     .fetch_all(pool)
@@ -260,11 +348,27 @@ pub async fn list_conversations(
 
     match rows {
         Ok(rs) => {
-            let list: Vec<ConversationSummary> = rs.into_iter().map(|r| ConversationSummary {
-                id: r.get::<String, _>("id"),
-                user_id: r.get::<String, _>("user_id"),
-                title: r.try_get::<Option<String>, _>("title").unwrap_or(None),
-                created_at: r.get::<String, _>("created_at"),
+            let list: Vec<ConversationSummary> = rs.into_iter().map(|r| {
+                let context = if r.try_get::<Option<String>, _>("user_role").ok().flatten().is_some() {
+                    Some(ConversationContext {
+                        user_role: r.try_get("user_role").ok().flatten(),
+                        business_stage: r.try_get("business_stage").ok().flatten(),
+                        goal: r.try_get("goal").ok().flatten(),
+                        urgency: r.try_get("urgency").ok().flatten(),
+                        region: r.try_get("region").ok().flatten(),
+                        business_niche: r.try_get("business_niche").ok().flatten(),
+                    })
+                } else {
+                    None
+                };
+                
+                ConversationSummary {
+                    id: r.get("id"),
+                    user_id: r.get("user_id"),
+                    title: r.try_get("title").ok().flatten(),
+                    created_at: r.get("created_at"),
+                    context,
+                }
             }).collect();
             HttpResponse::Ok().json(json!({"user_id": user_id, "conversations": list}))
         }
@@ -651,4 +755,150 @@ async fn generate_file_and_store(
         content_base64,
         download_url,
     })
+}
+
+// ========== CONTEXT FUNCTIONS ==========
+
+async fn get_conversation_context(
+    pool: &sqlx::SqlitePool,
+    conversation_id: &str,
+) -> Option<ConversationContext> {
+    let row = sqlx::query(
+        "SELECT user_role, business_stage, goal, urgency, region, business_niche 
+         FROM conversation_context WHERE conversation_id = ?"
+    )
+    .bind(conversation_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()?;
+    
+    Some(ConversationContext {
+        user_role: row.try_get("user_role").ok().flatten(),
+        business_stage: row.try_get("business_stage").ok().flatten(),
+        goal: row.try_get("goal").ok().flatten(),
+        urgency: row.try_get("urgency").ok().flatten(),
+        region: row.try_get("region").ok().flatten(),
+        business_niche: row.try_get("business_niche").ok().flatten(),
+    })
+}
+
+async fn get_user_base_context(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> ConversationContext {
+    let row = sqlx::query(
+        "SELECT user_role, business_stage, business_niche, region FROM users WHERE id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    
+    match row {
+        Some(r) => ConversationContext {
+            user_role: r.try_get("user_role").ok().flatten(),
+            business_stage: r.try_get("business_stage").ok().flatten(),
+            goal: None,
+            urgency: None,
+            region: r.try_get("region").ok().flatten(),
+            business_niche: r.try_get("business_niche").ok().flatten(),
+        },
+        None => ConversationContext {
+            user_role: None,
+            business_stage: None,
+            goal: None,
+            urgency: None,
+            region: None,
+            business_niche: None,
+        },
+    }
+}
+
+fn merge_contexts(
+    base: ConversationContext,
+    conversation: Option<ConversationContext>,
+    filters: Option<ContextFilters>,
+) -> ConversationContext {
+    // Приоритет: filters > conversation > base
+    let mut result = base;
+    
+    // Применить контекст беседы
+    if let Some(conv) = conversation {
+        if let Some(role) = conv.user_role {
+            result.user_role = Some(role);
+        }
+        if let Some(stage) = conv.business_stage {
+            result.business_stage = Some(stage);
+        }
+        if let Some(goal) = conv.goal {
+            result.goal = Some(goal);
+        }
+        if let Some(urgency) = conv.urgency {
+            result.urgency = Some(urgency);
+        }
+        if let Some(region) = conv.region {
+            result.region = Some(region);
+        }
+        if let Some(niche) = conv.business_niche {
+            result.business_niche = Some(niche);
+        }
+    }
+    
+    // Применить фильтры из запроса (высший приоритет)
+    if let Some(f) = filters {
+        if let Some(role) = f.user_role {
+            result.user_role = Some(role);
+        }
+        if let Some(stage) = f.business_stage {
+            result.business_stage = Some(stage);
+        }
+        if let Some(goal) = f.goal {
+            result.goal = Some(goal);
+        }
+        if let Some(urgency) = f.urgency {
+            result.urgency = Some(urgency);
+        }
+        if let Some(region) = f.region {
+            result.region = Some(region);
+        }
+        if let Some(niche) = f.business_niche {
+            result.business_niche = Some(niche);
+        }
+    }
+    
+    result
+}
+
+async fn save_conversation_context(
+    pool: &sqlx::SqlitePool,
+    conversation_id: &str,
+    context: &ContextFilters,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_context (conversation_id, user_role, business_stage, goal, urgency, region, business_niche)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id) DO UPDATE SET
+            user_role = COALESCE(excluded.user_role, conversation_context.user_role),
+            business_stage = COALESCE(excluded.business_stage, conversation_context.business_stage),
+            goal = COALESCE(excluded.goal, conversation_context.goal),
+            urgency = COALESCE(excluded.urgency, conversation_context.urgency),
+            region = COALESCE(excluded.region, conversation_context.region),
+            business_niche = COALESCE(excluded.business_niche, conversation_context.business_niche),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        "#
+    )
+    .bind(conversation_id)
+    .bind(&context.user_role)
+    .bind(&context.business_stage)
+    .bind(&context.goal)
+    .bind(&context.urgency)
+    .bind(&context.region)
+    .bind(&context.business_niche)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
 }

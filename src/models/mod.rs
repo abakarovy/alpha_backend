@@ -11,4 +11,7 @@ pub use conversation::{
     MessageRecord,
     FileAttachment,
     TableSpec,
+    ConversationContext,
+    ContextFilters,
+    CreateConversationRequest,
 };
