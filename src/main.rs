@@ -15,9 +15,9 @@ async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().ok();
     
     let port = std::env::var("PORT")
-        .unwrap_or_else(|_| "3000".to_string())
+        .unwrap_or_else(|_| "8080".to_string())
         .parse::<u16>()
-        .unwrap_or(3000);
+        .unwrap_or(8080);
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://app.db".to_string());
     
     println!("
