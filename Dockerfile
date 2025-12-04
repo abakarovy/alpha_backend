@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user for security
@@ -48,11 +49,12 @@ COPY --from=builder /app/target/release/business-assistant-backend /app/business
 # Copy assets directory
 COPY --from=builder /app/assets ./assets
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 # Create directory for database (will be mounted as volume)
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
-
-# Switch to non-root user
-USER appuser
 
 # Expose port
 EXPOSE 3000
@@ -66,6 +68,9 @@ ENV RUST_LOG=info
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
-# Run the application
+# Set entrypoint (runs as root to fix permissions, then switches to appuser)
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# Run the application (entrypoint will switch to appuser)
 CMD ["./business-assistant-backend"]
 
