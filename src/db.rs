@@ -36,6 +36,22 @@ async fn seed_analytics_data(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         
+        // Insert i18n for top trend
+        sqlx::query(
+            "INSERT INTO top_weekly_trends_i18n (id, locale, title) VALUES (?, 'en', ?)"
+        )
+        .bind(&top_id)
+        .bind("Gaming laptops")
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO top_weekly_trends_i18n (id, locale, title) VALUES (?, 'ru', ?)"
+        )
+        .bind(&top_id)
+        .bind("Игровые ноутбуки")
+        .execute(pool)
+        .await?;
+        
         // Insert second place (position 2)
         let second_id = Uuid::new_v4().to_string();
         sqlx::query(
@@ -49,18 +65,54 @@ async fn seed_analytics_data(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
         
+        // Insert i18n for second place
+        sqlx::query(
+            "INSERT INTO top_weekly_trends_i18n (id, locale, title) VALUES (?, 'en', ?)"
+        )
+        .bind(&second_id)
+        .bind("Online education")
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO top_weekly_trends_i18n (id, locale, title) VALUES (?, 'ru', ?)"
+        )
+        .bind(&second_id)
+        .bind("Онлайн образование")
+        .execute(pool)
+        .await?;
+        
         // Insert geo trends (top 3)
-        let geo_countries = vec![("Belgium", 54.0, 1), ("Netherlands", 48.0, 2), ("Germany", 42.0, 3)];
-        for (country, increase, rank) in geo_countries {
+        let geo_countries = vec![
+            ("Belgium", "Бельгия", 54.0, 1), 
+            ("Netherlands", "Нидерланды", 48.0, 2), 
+            ("Germany", "Германия", 42.0, 3)
+        ];
+        for (country_en, country_ru, increase, rank) in geo_countries {
             let geo_id = Uuid::new_v4().to_string();
             sqlx::query(
                 "INSERT INTO geo_trends (id, week_start, country, increase, rank) VALUES (?, ?, ?, ?, ?)"
             )
             .bind(&geo_id)
             .bind(&week_start_str)
-            .bind(country)
+            .bind(country_en)
             .bind(increase)
             .bind(rank as i64)
+            .execute(pool)
+            .await?;
+            
+            // Insert i18n for geo trend
+            sqlx::query(
+                "INSERT INTO geo_trends_i18n (id, locale, country) VALUES (?, 'en', ?)"
+            )
+            .bind(&geo_id)
+            .bind(country_en)
+            .execute(pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO geo_trends_i18n (id, locale, country) VALUES (?, 'ru', ?)"
+            )
+            .bind(&geo_id)
+            .bind(country_ru)
             .execute(pool)
             .await?;
         }
@@ -79,13 +131,32 @@ async fn seed_analytics_data(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         let competitiveness_json = serde_json::to_string(&vec![25.5, 30.2, 35.8, 28.4, 32.1, 40.0, 38.7])
             .unwrap_or_else(|_| "[]".to_string());
         
+        let description_en = "Online education trend can be used to increase the brand as a source of benefit";
+        let description_ru = "Тренд онлайн-образования можно использовать для повышения бренда как источника выгоды";
+        
         sqlx::query(
             "INSERT INTO ai_analytics (id, increase, description, level_of_competitiveness) VALUES (?, ?, ?, ?)"
         )
         .bind(&ai_id)
         .bind(10.0)
-        .bind("Online education trend can be used to increase the brand as a source of benefit")
+        .bind(description_en)
         .bind(&competitiveness_json)
+        .execute(pool)
+        .await?;
+        
+        // Insert i18n for AI analytics
+        sqlx::query(
+            "INSERT INTO ai_analytics_i18n (id, locale, description) VALUES (?, 'en', ?)"
+        )
+        .bind(&ai_id)
+        .bind(description_en)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO ai_analytics_i18n (id, locale, description) VALUES (?, 'ru', ?)"
+        )
+        .bind(&ai_id)
+        .bind(description_ru)
         .execute(pool)
         .await?;
     }
@@ -101,22 +172,38 @@ async fn seed_analytics_data(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     
     if existing_niches.is_none() {
         let niches = vec![
-            ("Beauty", 34.0),
-            ("Food Delivery", -6.0),
-            ("Fitness", 28.5),
-            ("Travel", -12.3),
-            ("Technology", 45.2),
+            ("Beauty", "Красота", 34.0),
+            ("Food Delivery", "Доставка еды", -6.0),
+            ("Fitness", "Фитнес", 28.5),
+            ("Travel", "Путешествия", -12.3),
+            ("Technology", "Технологии", 45.2),
         ];
         
-        for (title, change) in niches {
+        for (title_en, title_ru, change) in niches {
             let niche_id = Uuid::new_v4().to_string();
             sqlx::query(
                 "INSERT INTO niches_month (id, month_start, title, change) VALUES (?, ?, ?, ?)"
             )
             .bind(&niche_id)
             .bind(&month_start_str)
-            .bind(title)
+            .bind(title_en)
             .bind(change)
+            .execute(pool)
+            .await?;
+            
+            // Insert i18n for niche
+            sqlx::query(
+                "INSERT INTO niches_month_i18n (id, locale, title) VALUES (?, 'en', ?)"
+            )
+            .bind(&niche_id)
+            .bind(title_en)
+            .execute(pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO niches_month_i18n (id, locale, title) VALUES (?, 'ru', ?)"
+            )
+            .bind(&niche_id)
+            .bind(title_ru)
             .execute(pool)
             .await?;
         }
@@ -287,6 +374,68 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
             title TEXT NOT NULL,
             change REAL NOT NULL,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // i18n tables for new analytics endpoints
+    
+    // i18n for top_weekly_trends (localized title)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS top_weekly_trends_i18n (
+            id TEXT NOT NULL,
+            locale TEXT NOT NULL,
+            title TEXT,
+            PRIMARY KEY (id, locale),
+            FOREIGN KEY(id) REFERENCES top_weekly_trends(id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // i18n for geo_trends (localized country name)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS geo_trends_i18n (
+            id TEXT NOT NULL,
+            locale TEXT NOT NULL,
+            country TEXT,
+            PRIMARY KEY (id, locale),
+            FOREIGN KEY(id) REFERENCES geo_trends(id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // i18n for ai_analytics (localized description)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_analytics_i18n (
+            id TEXT NOT NULL,
+            locale TEXT NOT NULL,
+            description TEXT,
+            PRIMARY KEY (id, locale),
+            FOREIGN KEY(id) REFERENCES ai_analytics(id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // i18n for niches_month (localized title)
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS niches_month_i18n (
+            id TEXT NOT NULL,
+            locale TEXT NOT NULL,
+            title TEXT,
+            PRIMARY KEY (id, locale),
+            FOREIGN KEY(id) REFERENCES niches_month(id) ON DELETE CASCADE
         );
         "#,
     )
