@@ -6,7 +6,7 @@
 # Rust build artifacts
 target/
 **/*.rs.bk
-Cargo.lock
+# Note: Cargo.lock is needed for reproducible builds, don't exclude it
 
 # IDE
 .vscode/
