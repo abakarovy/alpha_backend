@@ -205,10 +205,9 @@ pub async fn upload_profile_picture(
 
     while let Ok(Some(mut field)) = payload.try_next().await {
         if field.name() == "profile_picture" {
-            if let Some(content_disposition) = field.content_disposition() {
-                if let Some(name) = content_disposition.get_filename() {
-                    filename = Some(name.to_string());
-                }
+            let content_disposition = field.content_disposition();
+            if let Some(name) = content_disposition.get_filename() {
+                filename = Some(name.to_string());
             }
 
             // Get content type
