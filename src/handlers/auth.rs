@@ -32,6 +32,7 @@ pub struct UserProfile {
     pub phone: Option<String>,
     pub country: Option<String>,
     pub gender: Option<String>,
+    pub profile_picture: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +43,7 @@ pub struct UpdateUserData {
     pub phone: Option<String>,
     pub country: Option<String>,
     pub gender: Option<String>,
+    pub profile_picture: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct EmailCheckReq {
@@ -109,7 +111,7 @@ pub async fn get_profile(
     let user_id = path.into_inner();
 
     let row = sqlx::query(
-        "SELECT id, email, business_type, created_at, full_name, nickname, phone, country, gender
+        "SELECT id, email, business_type, created_at, full_name, nickname, phone, country, gender, profile_picture
          FROM users
          WHERE id = ?
          LIMIT 1",
@@ -142,6 +144,7 @@ pub async fn get_profile(
         phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
         country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
         gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
+        profile_picture: row.try_get::<Option<String>, _>("profile_picture").unwrap_or(None),
     };
 
     HttpResponse::Ok().json(profile)
@@ -170,6 +173,10 @@ pub async fn update_profile(
     let now = chrono::Utc::now().to_rfc3339();
 
     let update = data.into_inner();
+    
+    let profile_picture_was_provided = update.profile_picture.is_some();
+    let profile_picture_value: Option<&str> = update.profile_picture.as_ref()
+        .and_then(|s| if s.is_empty() { None } else { Some(s.as_str()) });
 
     let result = sqlx::query(
         "UPDATE users SET
@@ -178,7 +185,11 @@ pub async fn update_profile(
             nickname = COALESCE(?, nickname),
             phone = COALESCE(?, phone),
             country = COALESCE(?, country),
-            gender = COALESCE(?, gender)
+            gender = COALESCE(?, gender),
+            profile_picture = CASE 
+                WHEN ? = 0 THEN profile_picture
+                ELSE ?
+            END
          WHERE id = (
             SELECT user_id FROM sessions
             WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)
@@ -190,6 +201,8 @@ pub async fn update_profile(
     .bind(update.phone.as_deref())
     .bind(update.country.as_deref())
     .bind(update.gender.as_deref())
+    .bind(if profile_picture_was_provided { 1 } else { 0 })
+    .bind(profile_picture_value)
     .bind(token)
     .bind(&now)
     .execute(&state.pool)
@@ -219,7 +232,7 @@ pub async fn update_profile(
     }
 
     let row = sqlx::query(
-        "SELECT u.id, u.email, u.business_type, u.created_at, u.full_name, u.nickname, u.phone, u.country, u.gender
+        "SELECT u.id, u.email, u.business_type, u.created_at, u.full_name, u.nickname, u.phone, u.country, u.gender, u.profile_picture
          FROM sessions s
          JOIN users u ON s.user_id = u.id
          WHERE s.token = ? AND (s.expires_at IS NULL OR s.expires_at > ?)
@@ -253,6 +266,7 @@ pub async fn update_profile(
         phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
         country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
         gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
+        profile_picture: row.try_get::<Option<String>, _>("profile_picture").unwrap_or(None),
     };
 
     HttpResponse::Ok().json(profile)
@@ -299,6 +313,10 @@ pub async fn register(
         }
     };
     
+    // Normalize empty profile_picture strings to None (NULL in DB)
+    let profile_picture_value = auth_req.profile_picture.as_ref()
+        .and_then(|s| if s.is_empty() { None } else { Some(s.as_str()) });
+
     let user = User {
         id: Uuid::new_v4().to_string(),
         email: auth_req.email.clone(),
@@ -310,10 +328,11 @@ pub async fn register(
         phone: auth_req.phone.clone(),
         country: auth_req.country.clone(),
         gender: auth_req.gender.clone(),
+        profile_picture: profile_picture_value.map(|s| s.to_string()),
     };
 
     if let Err(_) = sqlx::query(
-        "INSERT INTO users (id, email, password, business_type, created_at, full_name, nickname, phone, country, gender) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO users (id, email, password, business_type, created_at, full_name, nickname, phone, country, gender, profile_picture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&user.id)
     .bind(&user.email)
@@ -325,6 +344,7 @@ pub async fn register(
     .bind(&user.phone)
     .bind(&user.country)
     .bind(&user.gender)
+    .bind(&user.profile_picture)
     .execute(pool)
     .await
     {
@@ -376,7 +396,7 @@ pub async fn login(
     let locale = i18n::detect_locale(&req);
 
     let row = sqlx::query(
-        "SELECT id, email, password, business_type, created_at, full_name, nickname, phone, country, gender FROM users WHERE email = ? LIMIT 1"
+        "SELECT id, email, password, business_type, created_at, full_name, nickname, phone, country, gender, profile_picture FROM users WHERE email = ? LIMIT 1"
     )
     .bind(&auth_req.email)
     .fetch_optional(pool)
@@ -406,6 +426,7 @@ pub async fn login(
         phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
         country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
         gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
+        profile_picture: row.try_get::<Option<String>, _>("profile_picture").unwrap_or(None),
     };
     
     let is_valid = match bcrypt::verify(&auth_req.password, &user.password) {

@@ -12,6 +12,7 @@ pub struct User {
     pub phone: Option<String>,
     pub country: Option<String>,
     pub gender: Option<String>,
+    pub profile_picture: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,4 +25,5 @@ pub struct AuthRequest {
     pub phone: Option<String>,
     pub country: Option<String>,
     pub gender: Option<String>,
+    pub profile_picture: Option<String>,
 }
