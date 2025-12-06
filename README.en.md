@@ -13,13 +13,15 @@ It provides authentication, user profiles, chat with conversation history, simpl
 
 - **Authentication & User Accounts**
   - `POST /api/auth/register`
-    - Registers a new user with email, password, business type, and optional profile data.
+    - Registers a new user with email, password, business type, and optional profile data (including telegram_username).
     - Creates an initial session and returns a session token.
   - `POST /api/auth/login`
     - Logs in an existing user with email and password.
     - Returns a new session token on success.
   - `GET /api/auth/check-user?email={email}`
     - Checks if a user with the given email already exists.
+  - `GET /api/auth/check-telegram-username?telegram_username={username}`
+    - Checks if a user with the given Telegram username already exists.
   - `GET /api/auth/check-token?token={token}`
     - Validates whether a session token is present and not expired.
 
@@ -27,10 +29,10 @@ It provides authentication, user profiles, chat with conversation history, simpl
   - `GET /api/auth/profile?token={token}`
     - Returns the authenticated user profile (without password), including:
       - `id`, `email`, `business_type`, `created_at`
-      - Optional: `full_name`, `nickname`, `phone`, `country`, `gender`
+      - Optional: `full_name`, `nickname`, `phone`, `country`, `gender`, `telegram_username`, `profile_picture`
   - `PUT /api/auth/profile?token={token}`
-    - Updates the authenticated user’s profile fields:
-      - `business_type`, `full_name`, `nickname`, `phone`, `country`, `gender`
+    - Updates the authenticated user's profile fields:
+      - `business_type`, `full_name`, `nickname`, `phone`, `country`, `gender`, `telegram_username`, `profile_picture`
     - Returns the updated profile.
 
 - **Chat & Conversations**
@@ -147,7 +149,8 @@ Content-Type: application/json
   "email": "user@example.com",
   "password": "strong-password",
   "business_type": "ecommerce",
-  "full_name": "Jane Doe"
+  "full_name": "Jane Doe",
+  "telegram_username": "janedoe"
 }
 ```
 
@@ -165,6 +168,32 @@ Content-Type: application/json
 
 Response includes a `token` you can pass as `?token=` when calling profile endpoints.
 
+### Check if Email Exists
+
+```http
+GET /api/auth/check-user?email=user@example.com
+```
+
+Response:
+```json
+{
+  "exists": true
+}
+```
+
+### Check if Telegram Username Exists
+
+```http
+GET /api/auth/check-telegram-username?telegram_username=janedoe
+```
+
+Response:
+```json
+{
+  "exists": true
+}
+```
+
 ### Get Profile
 
 ```http
@@ -180,7 +209,8 @@ Content-Type: application/json
 {
   "full_name": "New Name",
   "phone": "+123456789",
-  "country": "US"
+  "country": "US",
+  "telegram_username": "newusername"
 }
 ```
 

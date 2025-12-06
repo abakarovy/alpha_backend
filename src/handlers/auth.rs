@@ -59,6 +59,16 @@ pub struct EmailCheckRes {
     pub exists: bool,
 }
 
+#[derive(Deserialize)]
+pub struct TelegramUsernameCheckReq {
+    pub telegram_username: String,
+}
+
+#[derive(Serialize)]
+pub struct TelegramUsernameCheckRes {
+    pub exists: bool,
+}
+
 pub async fn email_exists(
     _req: HttpRequest,
     query: web::Query<EmailCheckReq>,
@@ -73,6 +83,22 @@ pub async fn email_exists(
     .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(EmailCheckRes { exists }))
+}
+
+pub async fn telegram_username_exists(
+    _req: HttpRequest,
+    query: web::Query<TelegramUsernameCheckReq>,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, Error> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE telegram_username = ? AND telegram_username IS NOT NULL)",
+    )
+    .bind(&query.telegram_username)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    Ok(HttpResponse::Ok().json(TelegramUsernameCheckRes { exists }))
 }
 
 pub async fn check_token(

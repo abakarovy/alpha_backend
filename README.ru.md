@@ -14,13 +14,15 @@
 
 - **Аутентификация и учетные записи пользователей**
   - `POST /api/auth/register`
-    - Регистрирует нового пользователя по email, паролю, типу бизнеса и дополнительным полям профиля.
+    - Регистрирует нового пользователя по email, паролю, типу бизнеса и дополнительным полям профиля (включая telegram_username).
     - Создает начальную сессию и возвращает токен сессии.
   - `POST /api/auth/login`
     - Авторизует существующего пользователя по email и паролю.
     - Возвращает новый токен сессии при успешном входе.
   - `GET /api/auth/check-user?email={email}`
     - Проверяет, существует ли пользователь с указанным email.
+  - `GET /api/auth/check-telegram-username?telegram_username={username}`
+    - Проверяет, существует ли пользователь с указанным Telegram username.
   - `GET /api/auth/check-token?token={token}`
     - Проверяет, действителен ли токен сессии и не истек ли его срок.
 
@@ -28,10 +30,10 @@
   - `GET /api/auth/profile?token={token}`
     - Возвращает профиль аутентифицированного пользователя (без пароля), включая:
       - `id`, `email`, `business_type`, `created_at`
-      - Дополнительно (опционально): `full_name`, `nickname`, `phone`, `country`, `gender`
+      - Дополнительно (опционально): `full_name`, `nickname`, `phone`, `country`, `gender`, `telegram_username`, `profile_picture`
   - `PUT /api/auth/profile?token={token}`
     - Обновляет поля профиля аутентифицированного пользователя:
-      - `business_type`, `full_name`, `nickname`, `phone`, `country`, `gender`
+      - `business_type`, `full_name`, `nickname`, `phone`, `country`, `gender`, `telegram_username`, `profile_picture`
     - Возвращает обновленный профиль.
 
 - **Чат и диалоги**
@@ -148,7 +150,8 @@ Content-Type: application/json
   "email": "user@example.com",
   "password": "strong-password",
   "business_type": "ecommerce",
-  "full_name": "Jane Doe"
+  "full_name": "Jane Doe",
+  "telegram_username": "janedoe"
 }
 ```
 
@@ -166,6 +169,32 @@ Content-Type: application/json
 
 В ответе будет возвращен `token`, который далее можно передавать как `?token=` при запросах к эндпоинтам профиля.
 
+### Проверка существования email
+
+```http
+GET /api/auth/check-user?email=user@example.com
+```
+
+Ответ:
+```json
+{
+  "exists": true
+}
+```
+
+### Проверка существования Telegram username
+
+```http
+GET /api/auth/check-telegram-username?telegram_username=janedoe
+```
+
+Ответ:
+```json
+{
+  "exists": true
+}
+```
+
 ### Получение профиля
 
 ```http
@@ -181,7 +210,8 @@ Content-Type: application/json
 {
   "full_name": "New Name",
   "phone": "+123456789",
-  "country": "US"
+  "country": "US",
+  "telegram_username": "newusername"
 }
 ```
 
