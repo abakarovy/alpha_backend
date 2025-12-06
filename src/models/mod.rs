@@ -6,7 +6,6 @@ pub use conversation::{
     Message,
     ChatRequest,
     ChatResponse,
-    QuickAdviceRequest,
     ConversationSummary,
     MessageRecord,
     FileAttachment,
