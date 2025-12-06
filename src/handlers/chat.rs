@@ -50,17 +50,33 @@ pub async fn send_message(
     };
 
     let pool = &state.pool;
+    
+    // Resolve user_id to main user_id for conversation synchronization
+    let resolved_user_id = resolve_user_id_for_conversations(pool, &chat_req.user_id).await;
+    
     let conversation_id = if let Some(cid) = chat_req.conversation_id.clone() {
-        // Validate conversation belongs to user
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
-        )
-        .bind(&cid)
-        .bind(&chat_req.user_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+        // Get all synced user IDs to check conversation ownership
+        let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
+        
+        // Validate conversation belongs to any of the synced user_ids
+        let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id IN ({})) THEN 1 ELSE 0 END",
+            placeholders
+        );
+        
+        let mut query_builder = sqlx::query_scalar::<_, i64>(&query)
+            .bind(&cid);
+        
+        for user_id in &synced_user_ids {
+            query_builder = query_builder.bind(user_id);
+        }
+        
+        let exists: Option<i64> = query_builder
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
         match exists {
             Some(1) => cid,
             _ => {
@@ -70,7 +86,7 @@ pub async fn send_message(
                     "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
                 )
                 .bind(&new_id)
-                .bind(&chat_req.user_id)
+                .bind(&resolved_user_id)
                 .bind::<Option<String>>(None)
                 .bind(&now)
                 .execute(pool)
@@ -91,7 +107,7 @@ pub async fn send_message(
             "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
         )
         .bind(&new_id)
-        .bind(&chat_req.user_id)
+        .bind(&resolved_user_id)
         .bind::<Option<String>>(None)
         .bind(&now)
         .execute(pool)
@@ -107,7 +123,7 @@ pub async fn send_message(
     
     // Получить контекст для использования в промпте
     let conversation_context = get_conversation_context(pool, &conversation_id).await;
-    let user_base_context = get_user_base_context(pool, &chat_req.user_id).await;
+    let user_base_context = get_user_base_context(pool, &resolved_user_id).await;
     let final_context = merge_contexts(user_base_context, conversation_context, chat_req.context_filters.clone());
 
     let conversation_history = {
@@ -203,8 +219,8 @@ pub async fn send_message(
         "INSERT INTO messages (id, conversation_id, user_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(&user_msg_id)
-    .bind(&conversation_id)
-    .bind(&chat_req.user_id)
+        .bind(&conversation_id)
+    .bind(&resolved_user_id)
     .bind("user")
     .bind(&chat_req.message)
     .bind(&now1)
@@ -217,8 +233,8 @@ pub async fn send_message(
         "INSERT INTO messages (id, conversation_id, user_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(&asst_msg_id)
-    .bind(&conversation_id)
-    .bind(&chat_req.user_id)
+        .bind(&conversation_id)
+    .bind(&resolved_user_id)
     .bind("assistant")
     .bind(&ai_response)
     .bind(&now2)
@@ -268,6 +284,10 @@ pub async fn create_conversation(
     state: web::Data<AppState>,
 ) -> HttpResponse {
     let pool = &state.pool;
+    
+    // Resolve user_id to main user_id for conversation synchronization
+    let resolved_user_id = resolve_user_id_for_conversations(pool, &data.user_id).await;
+    
     let conversation_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     
@@ -276,7 +296,7 @@ pub async fn create_conversation(
         "INSERT INTO conversations (id, user_id, title, created_at) VALUES (?, ?, ?, ?)"
     )
     .bind(&conversation_id)
-    .bind(&data.user_id)
+    .bind(&resolved_user_id)
     .bind(&data.title)
     .bind(&now)
     .execute(pool)
@@ -331,20 +351,34 @@ pub async fn list_conversations(
 ) -> HttpResponse {
     let user_id = path.into_inner();
     let pool = &state.pool;
-    let rows = sqlx::query(
+    
+    // Get all synced user IDs to show conversations from all linked accounts
+    let resolved_user_id = resolve_user_id_for_conversations(pool, &user_id).await;
+    let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
+    
+    // Build query with IN clause for all synced user_ids
+    let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let query = format!(
         r#"
         SELECT 
             c.id, c.user_id, c.title, c.created_at,
             ctx.user_role, ctx.business_stage, ctx.goal, ctx.urgency, ctx.region, ctx.business_niche
         FROM conversations c
         LEFT JOIN conversation_context ctx ON c.id = ctx.conversation_id
-        WHERE c.user_id = ? 
+        WHERE c.user_id IN ({}) 
         ORDER BY datetime(c.created_at) DESC
-        "#
-    )
-    .bind(&user_id)
-    .fetch_all(pool)
-    .await;
+        "#,
+        placeholders
+    );
+    
+    let mut query_builder = sqlx::query(&query);
+    for user_id_val in &synced_user_ids {
+        query_builder = query_builder.bind(user_id_val);
+    }
+    
+    let rows = query_builder
+        .fetch_all(pool)
+        .await;
 
     match rows {
         Ok(rs) => {
@@ -480,18 +514,31 @@ pub async fn delete_conversation(
     body: web::Json<ConversationOwner>,
 ) -> HttpResponse {
     let conversation_id = path.into_inner();
-    let user_id = &body.user_id;
     let pool = &state.pool;
 
-    let exists: Option<i64> = sqlx::query_scalar(
-        "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
-    )
-    .bind(&conversation_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    // Resolve user_id and get all synced user IDs
+    let resolved_user_id = resolve_user_id_for_conversations(pool, &body.user_id).await;
+    let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
+    
+    // Check if conversation belongs to any of the synced user_ids
+    let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let query = format!(
+        "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id IN ({})) THEN 1 ELSE 0 END",
+        placeholders
+    );
+    
+    let mut query_builder = sqlx::query_scalar::<_, i64>(&query)
+        .bind(&conversation_id);
+    
+    for user_id_val in &synced_user_ids {
+        query_builder = query_builder.bind(user_id_val);
+    }
+    
+    let exists: Option<i64> = query_builder
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
 
     let locale = i18n::detect_locale(&req);
     let error_msg = match locale {
@@ -509,7 +556,7 @@ pub async fn delete_conversation(
 
             let _ = sqlx::query("DELETE FROM conversations WHERE id = ? AND user_id = ?")
                 .bind(&conversation_id)
-                .bind(user_id)
+                .bind(&resolved_user_id)
                 .execute(pool)
                 .await;
 
@@ -535,14 +582,28 @@ pub async fn update_conversation_title(
     let pool = &state.pool;
     let locale = i18n::detect_locale(&req);
 
-    let result = sqlx::query(
-        "UPDATE conversations SET title = ? WHERE id = ? AND user_id = ?",
-    )
-    .bind(update.title.as_deref())
-    .bind(&conversation_id)
-    .bind(&update.user_id)
-    .execute(pool)
-    .await;
+    // Resolve user_id and get all synced user IDs
+    let resolved_user_id = resolve_user_id_for_conversations(pool, &update.user_id).await;
+    let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
+    
+    // Build query with IN clause
+    let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let query = format!(
+        "UPDATE conversations SET title = ? WHERE id = ? AND user_id IN ({})",
+        placeholders
+    );
+    
+    let mut query_builder = sqlx::query(&query)
+        .bind(update.title.as_deref())
+        .bind(&conversation_id);
+    
+    for user_id_val in &synced_user_ids {
+        query_builder = query_builder.bind(user_id_val);
+    }
+    
+    let result = query_builder
+        .execute(pool)
+        .await;
 
     let rows_affected = match result {
         Ok(r) => r.rows_affected(),
@@ -755,6 +816,122 @@ async fn generate_file_and_store(
         content_base64,
         download_url,
     })
+}
+
+// ========== USER ID RESOLUTION ==========
+
+/// Resolves user_id to the main user_id for conversation synchronization
+/// If the provided user_id is a telegram_user_id, returns the linked main user_id
+/// If the telegram_user is linked to a main user, uses that user_id for conversations
+/// Otherwise, returns the original user_id
+async fn resolve_user_id_for_conversations(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> String {
+    // First, check if this is a main user_id (UUID format or exists in users table)
+    let is_main_user: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM users WHERE id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    
+    if let Some(1) = is_main_user {
+        // This is a main user_id, check if they have telegram_username linked
+        // and if that telegram_user has conversations
+        return user_id.to_string();
+    }
+    
+    // Check if this is a telegram_user_id (numeric) and if it's linked to a main user
+    if let Ok(telegram_user_id) = user_id.parse::<i64>() {
+        let linked_user_id: Option<String> = sqlx::query_scalar(
+            "SELECT user_id FROM telegram_users WHERE telegram_user_id = ? AND user_id IS NOT NULL"
+        )
+        .bind(telegram_user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        
+        if let Some(main_user_id) = linked_user_id {
+            return main_user_id;
+        }
+    }
+    
+    // Check if this telegram_username exists in users table
+    // (in case user_id passed is actually a telegram_username string)
+    let user_by_telegram_username: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE telegram_username = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    
+    if let Some(main_user_id) = user_by_telegram_username {
+        return main_user_id;
+    }
+    
+    // Fallback: return original user_id
+    user_id.to_string()
+}
+
+/// Gets all user IDs that should see the same conversations
+/// Returns a list including the main user_id and any linked telegram_user_ids
+async fn get_synced_user_ids(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Vec<String> {
+    let mut user_ids = vec![user_id.to_string()];
+    
+    // Check if main user has telegram_username
+    let telegram_username: Option<String> = sqlx::query_scalar(
+        "SELECT telegram_username FROM users WHERE id = ? AND telegram_username IS NOT NULL"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    
+    if let Some(username) = telegram_username {
+        // Find telegram_user by username
+        let telegram_user_id: Option<i64> = sqlx::query_scalar(
+            "SELECT telegram_user_id FROM telegram_users WHERE telegram_username = ?"
+        )
+        .bind(&username)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        
+        if let Some(tg_user_id) = telegram_user_id {
+            user_ids.push(tg_user_id.to_string());
+        }
+    }
+    
+    // Also check reverse: if telegram_user is linked to this user
+    if let Ok(telegram_user_id) = user_id.parse::<i64>() {
+        let linked_user_id: Option<String> = sqlx::query_scalar(
+            "SELECT user_id FROM telegram_users WHERE telegram_user_id = ? AND user_id IS NOT NULL"
+        )
+        .bind(telegram_user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        
+        if let Some(main_id) = linked_user_id {
+            if !user_ids.contains(&main_id) {
+                user_ids.push(main_id);
+            }
+        }
+    }
+    
+    user_ids
 }
 
 // ========== CONTEXT FUNCTIONS ==========
