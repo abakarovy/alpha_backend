@@ -301,6 +301,9 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN profile_picture TEXT;")
         .execute(&pool)
         .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN telegram_username TEXT;")
+        .execute(&pool)
+        .await;
 
     sqlx::query(
         r#"
