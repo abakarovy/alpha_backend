@@ -72,6 +72,10 @@ async fn main() -> std::io::Result<()> {
             .route("/api/auth/profile", web::put().to(handlers::auth::update_profile))
             .route("/api/auth/profile-picture", web::post().to(handlers::auth::upload_profile_picture))
 
+            .route("/api/telegram/users", web::post().to(handlers::telegram::create_or_get_telegram_user))
+            .route("/api/telegram/users/{telegram_user_id}", web::get().to(handlers::telegram::get_telegram_user_by_id))
+            .route("/api/telegram/users/{telegram_user_id}/link", web::post().to(handlers::telegram::link_telegram_user_to_account))
+
             .route("/api/analytics/weekly-trends", web::get().to(handlers::analytics::get_weekly_trends))
             .route("/api/analytics/weekly-trends", web::post().to(handlers::analytics::upsert_weekly_trends))
             .route("/api/analytics/ai-analytics", web::get().to(handlers::analytics::get_ai_analytics))

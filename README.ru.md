@@ -69,6 +69,17 @@
   - `POST /api/analytics/popularity`
     - Получение или сохранение (upsert) записей о трендах популярности (legacy, для обратной совместимости).
 
+- **Пользователи Telegram**
+  - `POST /api/telegram/users`
+    - Создает нового пользователя Telegram или возвращает существующего, если он уже зарегистрирован.
+    - Автоматически регистрирует пользователей Telegram при запуске бота.
+    - Тело запроса: `telegram_user_id` (обязательно), `telegram_username`, `first_name`, `last_name` (все опционально)
+  - `GET /api/telegram/users/{telegram_user_id}`
+    - Получает пользователя Telegram по его Telegram user ID.
+  - `POST /api/telegram/users/{telegram_user_id}/link`
+    - Связывает пользователя Telegram с основной учетной записью пользователя.
+    - Тело запроса: `user_id` (обязательно)
+
 - **Файлы**
   - `GET /api/files/{id}`
     - Скачивание сохраненного файла по его ID.
@@ -282,6 +293,50 @@ Content-Type: application/json
     { "title": "Food Delivery", "change": -6.0 },
     { "title": "Fitness", "change": 28.5 }
   ]
+}
+```
+
+### Создание или получение пользователя Telegram
+
+```http
+POST /api/telegram/users
+Content-Type: application/json
+
+{
+  "telegram_user_id": 123456789,
+  "telegram_username": "janedoe",
+  "first_name": "Jane",
+  "last_name": "Doe"
+}
+```
+
+Ответ (201 Created или 200 OK, если существует):
+```json
+{
+  "id": "uuid-here",
+  "telegram_user_id": 123456789,
+  "telegram_username": "janedoe",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "created_at": "2024-01-01T00:00:00Z",
+  "user_id": null
+}
+```
+
+### Получение пользователя Telegram по ID
+
+```http
+GET /api/telegram/users/123456789
+```
+
+### Связывание пользователя Telegram с основной учетной записью
+
+```http
+POST /api/telegram/users/123456789/link
+Content-Type: application/json
+
+{
+  "user_id": "main-user-uuid"
 }
 ```
 

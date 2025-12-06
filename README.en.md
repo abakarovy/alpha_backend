@@ -68,6 +68,17 @@ It provides authentication, user profiles, chat with conversation history, simpl
   - `POST /api/analytics/popularity`
     - Get or upsert popularity trend records (legacy, for backward compatibility).
 
+- **Telegram Users**
+  - `POST /api/telegram/users`
+    - Creates a new Telegram user or returns existing one if already registered.
+    - Automatically registers Telegram users when they start the bot.
+    - Body: `telegram_user_id` (required), `telegram_username`, `first_name`, `last_name` (all optional)
+  - `GET /api/telegram/users/{telegram_user_id}`
+    - Retrieves a Telegram user by their Telegram user ID.
+  - `POST /api/telegram/users/{telegram_user_id}/link`
+    - Links a Telegram user to a main user account.
+    - Body: `user_id` (required)
+
 - **Files**
   - `GET /api/files/{id}`
     - Download a stored file by its ID.
@@ -281,6 +292,50 @@ Content-Type: application/json
     { "title": "Food Delivery", "change": -6.0 },
     { "title": "Fitness", "change": 28.5 }
   ]
+}
+```
+
+### Create or Get Telegram User
+
+```http
+POST /api/telegram/users
+Content-Type: application/json
+
+{
+  "telegram_user_id": 123456789,
+  "telegram_username": "janedoe",
+  "first_name": "Jane",
+  "last_name": "Doe"
+}
+```
+
+Response (201 Created or 200 OK if exists):
+```json
+{
+  "id": "uuid-here",
+  "telegram_user_id": 123456789,
+  "telegram_username": "janedoe",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "created_at": "2024-01-01T00:00:00Z",
+  "user_id": null
+}
+```
+
+### Get Telegram User by ID
+
+```http
+GET /api/telegram/users/123456789
+```
+
+### Link Telegram User to Main Account
+
+```http
+POST /api/telegram/users/123456789/link
+Content-Type: application/json
+
+{
+  "user_id": "main-user-uuid"
 }
 ```
 

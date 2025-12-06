@@ -646,5 +646,22 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS telegram_users (
+            id TEXT PRIMARY KEY,
+            telegram_user_id INTEGER NOT NULL UNIQUE,
+            telegram_username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            user_id TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     Ok(pool)
 }
