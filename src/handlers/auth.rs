@@ -57,6 +57,7 @@ pub struct EmailCheckReq {
 #[derive(Serialize)]
 pub struct EmailCheckRes {
     pub exists: bool,
+    pub profile_picture: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -74,15 +75,27 @@ pub async fn email_exists(
     query: web::Query<EmailCheckReq>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, Error> {
-    let exists: bool = sqlx::query_scalar(
-    "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)",
+    // Check if user exists and get profile_picture
+    let row = sqlx::query(
+        "SELECT profile_picture FROM users WHERE email = ? LIMIT 1"
     )
     .bind(&query.email)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await
     .map_err(actix_web::error::ErrorInternalServerError)?;
 
-    Ok(HttpResponse::Ok().json(EmailCheckRes { exists }))
+    let (exists, profile_picture) = match row {
+        Some(r) => {
+            let pic = r.try_get::<Option<String>, _>("profile_picture").unwrap_or(None);
+            (true, pic)
+        }
+        None => (false, None),
+    };
+
+    Ok(HttpResponse::Ok().json(EmailCheckRes { 
+        exists, 
+        profile_picture 
+    }))
 }
 
 pub async fn telegram_username_exists(

@@ -189,9 +189,12 @@ GET /api/auth/check-user?email=user@example.com
 Ответ:
 ```json
 {
-  "exists": true
+  "exists": true,
+  "profile_picture": "file-uuid-here"
 }
 ```
+
+Примечание: `profile_picture` будет `null`, если у пользователя не установлена фотография профиля.
 
 ### Проверка существования Telegram username
 

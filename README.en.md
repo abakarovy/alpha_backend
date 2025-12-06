@@ -188,9 +188,12 @@ GET /api/auth/check-user?email=user@example.com
 Response:
 ```json
 {
-  "exists": true
+  "exists": true,
+  "profile_picture": "file-uuid-here"
 }
 ```
+
+Note: `profile_picture` will be `null` if the user doesn't have a profile picture set.
 
 ### Check if Telegram Username Exists
 
