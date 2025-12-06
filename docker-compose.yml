@@ -24,6 +24,10 @@ services:
       # Telegram
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_GROUP_CHAT_ID=${TELEGRAM_GROUP_CHAT_ID}
+      # Ollama (System Installation)
+      - AI_PROVIDER=${AI_PROVIDER:-openrouter}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gpt-oss:20b}
     volumes:
       # Persist database
       - ./data:/app/data
