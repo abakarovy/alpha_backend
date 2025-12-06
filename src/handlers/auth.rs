@@ -1,4 +1,6 @@
 use actix_web::{Error, HttpRequest, HttpResponse, web};
+use actix_multipart::Multipart;
+use futures_util::TryStreamExt;
 use bcrypt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -134,6 +136,8 @@ pub async fn get_profile(
         }
     };
 
+    let profile_picture_id = row.try_get::<Option<String>, _>("profile_picture").unwrap_or(None);
+    
     let profile = UserProfile {
         id: row.get::<String, _>("id"),
         email: row.get::<String, _>("email"),
@@ -144,7 +148,207 @@ pub async fn get_profile(
         phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
         country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
         gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
-        profile_picture: row.try_get::<Option<String>, _>("profile_picture").unwrap_or(None),
+        profile_picture: profile_picture_id,
+    };
+
+    HttpResponse::Ok().json(profile)
+}
+
+pub async fn upload_profile_picture(
+    req: HttpRequest,
+    query: web::Query<TokenCheck>,
+    mut payload: Multipart,
+    state: web::Data<AppState>,
+) -> HttpResponse {
+    let locale = i18n::detect_locale(&req);
+    let token = match &query.token {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            let error_msg = match locale {
+                Locale::Ru => "Токен не предоставлен",
+                Locale::En => "no-token",
+            };
+            return HttpResponse::Unauthorized().json(json!({
+                "error": error_msg,
+            }));
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Get user_id from token
+    let user_id_row = sqlx::query_scalar::<_, String>(
+        "SELECT user_id FROM sessions WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)"
+    )
+    .bind(token)
+    .bind(&now)
+    .fetch_optional(&state.pool)
+    .await;
+
+    let user_id = match user_id_row {
+        Ok(Some(id)) => id,
+        _ => {
+            let error_msg = match locale {
+                Locale::Ru => "Недействительный или истекший токен",
+                Locale::En => "invalid-or-expired-token",
+            };
+            return HttpResponse::Unauthorized().json(json!({
+                "error": error_msg,
+            }));
+        }
+    };
+
+    // Process multipart form data
+    let mut file_data: Option<Vec<u8>> = None;
+    let mut filename: Option<String> = None;
+    let mut mime_type: Option<String> = None;
+
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        if field.name() == "profile_picture" {
+            if let Ok(content_disposition) = field.content_disposition() {
+                if let Some(name) = content_disposition.get_filename() {
+                    filename = Some(name.to_string());
+                }
+            }
+
+            // Get content type
+            if let Some(ct) = field.content_type() {
+                mime_type = Some(ct.to_string());
+            }
+
+            // Read file data
+            let mut bytes = Vec::new();
+            while let Ok(Some(chunk)) = field.try_next().await {
+                bytes.extend_from_slice(&chunk);
+            }
+            
+            if !bytes.is_empty() {
+                file_data = Some(bytes);
+            }
+        }
+    }
+
+    // Validate file was uploaded
+    let (file_bytes, file_mime, file_name) = match file_data {
+        Some(data) => {
+            let mime = mime_type.unwrap_or_else(|| "image/jpeg".to_string());
+            let name = filename.unwrap_or_else(|| format!("profile-{}.jpg", Uuid::new_v4()));
+            (data, mime, name)
+        }
+        None => {
+            let error_msg = match locale {
+                Locale::Ru => "Файл не предоставлен",
+                Locale::En => "no-file-provided",
+            };
+            return HttpResponse::BadRequest().json(json!({
+                "error": error_msg,
+            }));
+        }
+    };
+
+    // Validate file size (max 5MB)
+    if file_bytes.len() > 5 * 1024 * 1024 {
+        let error_msg = match locale {
+            Locale::Ru => "Файл слишком большой (максимум 5MB)",
+            Locale::En => "file-too-large-max-5mb",
+        };
+        return HttpResponse::BadRequest().json(json!({
+            "error": error_msg,
+        }));
+    }
+
+    // Validate it's an image
+    if !file_mime.starts_with("image/") {
+        let error_msg = match locale {
+            Locale::Ru => "Файл должен быть изображением",
+            Locale::En => "file-must-be-image",
+        };
+        return HttpResponse::BadRequest().json(json!({
+            "error": error_msg,
+        }));
+    }
+
+    // Store file in files table
+    let file_id = Uuid::new_v4().to_string();
+    let file_size = file_bytes.len() as i64;
+
+    let file_insert_result = sqlx::query(
+        "INSERT INTO files (id, filename, mime, size, bytes) VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(&file_id)
+    .bind(&file_name)
+    .bind(&file_mime)
+    .bind(file_size)
+    .bind(&file_bytes)
+    .execute(&state.pool)
+    .await;
+
+    if file_insert_result.is_err() {
+        let error_msg = match locale {
+            Locale::Ru => "Ошибка сохранения файла",
+            Locale::En => "file-save-failed",
+        };
+        return HttpResponse::InternalServerError().json(json!({
+            "error": error_msg,
+        }));
+    }
+
+    // Update user's profile_picture
+    let update_result = sqlx::query(
+        "UPDATE users SET profile_picture = ? WHERE id = ?"
+    )
+    .bind(&file_id)
+    .bind(&user_id)
+    .execute(&state.pool)
+    .await;
+
+    if update_result.is_err() {
+        let error_msg = match locale {
+            Locale::Ru => "Ошибка обновления профиля",
+            Locale::En => "profile-update-failed",
+        };
+        return HttpResponse::InternalServerError().json(json!({
+            "error": error_msg,
+        }));
+    }
+
+    // Return updated profile
+    let row = sqlx::query(
+        "SELECT id, email, business_type, created_at, full_name, nickname, phone, country, gender, profile_picture
+         FROM users
+         WHERE id = ?
+         LIMIT 1",
+    )
+    .bind(&user_id)
+    .fetch_optional(&state.pool)
+    .await;
+
+    let row = match row {
+        Ok(Some(r)) => r,
+        _ => {
+            let error_msg = match locale {
+                Locale::Ru => "Ошибка загрузки профиля",
+                Locale::En => "profile-load-failed",
+            };
+            return HttpResponse::InternalServerError().json(json!({
+                "error": error_msg,
+            }));
+        }
+    };
+
+    let profile_picture_id = row.try_get::<Option<String>, _>("profile_picture").unwrap_or(None);
+    
+    let profile = UserProfile {
+        id: row.get::<String, _>("id"),
+        email: row.get::<String, _>("email"),
+        business_type: row.get::<String, _>("business_type"),
+        created_at: row.get::<String, _>("created_at"),
+        full_name: row.try_get::<Option<String>, _>("full_name").unwrap_or(None),
+        nickname: row.try_get::<Option<String>, _>("nickname").unwrap_or(None),
+        phone: row.try_get::<Option<String>, _>("phone").unwrap_or(None),
+        country: row.try_get::<Option<String>, _>("country").unwrap_or(None),
+        gender: row.try_get::<Option<String>, _>("gender").unwrap_or(None),
+        profile_picture: profile_picture_id,
     };
 
     HttpResponse::Ok().json(profile)

@@ -69,6 +69,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/auth/check-token", web::get().to(handlers::auth::check_token))
             .route("/api/auth/profile/{user_id}", web::get().to(handlers::auth::get_profile))
             .route("/api/auth/profile", web::put().to(handlers::auth::update_profile))
+            .route("/api/auth/profile-picture", web::post().to(handlers::auth::upload_profile_picture))
 
             .route("/api/analytics/weekly-trends", web::get().to(handlers::analytics::get_weekly_trends))
             .route("/api/analytics/weekly-trends", web::post().to(handlers::analytics::upsert_weekly_trends))
