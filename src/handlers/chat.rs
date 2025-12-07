@@ -779,12 +779,17 @@ async fn generate_file_and_store(
 
 // ========== USER ID RESOLUTION ==========
 
+/// Normalizes telegram username by removing @ and converting to lowercase
+fn normalize_telegram_username(username: &str) -> String {
+    username.trim_start_matches('@').to_lowercase()
+}
+
 /// Resolves user_id to the main user_id for conversation synchronization
 /// Handles linking between main users and telegram users in both directions:
 /// 1. If main user_id is provided - returns it as is
 /// 2. If telegram_user_id is provided - finds linked main user_id via:
 ///    - Direct link through telegram_users.user_id
-///    - Link through matching telegram_username between users and telegram_users
+///    - Link through matching telegram_username (normalized, case-insensitive)
 /// 3. If telegram_username is provided - finds main user by telegram_username
 async fn resolve_user_id_for_conversations(
     pool: &sqlx::SqlitePool,
@@ -822,7 +827,7 @@ async fn resolve_user_id_for_conversations(
             return main_user_id;
         }
         
-        // Try to find linked main user through matching telegram_username
+        // Try to find linked main user through matching telegram_username (normalized)
         // Get telegram_username from telegram_users
         let telegram_username: Option<String> = sqlx::query_scalar(
             "SELECT telegram_username FROM telegram_users WHERE telegram_user_id = ? AND telegram_username IS NOT NULL"
@@ -833,36 +838,57 @@ async fn resolve_user_id_for_conversations(
         .ok()
         .flatten();
         
-        if let Some(username) = telegram_username {
-            // Find main user with matching telegram_username
-            let main_user_id: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM users WHERE telegram_username = ?"
-            )
-            .bind(&username)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+        if let Some(tg_username) = telegram_username {
+            let normalized_tg_username = normalize_telegram_username(&tg_username);
             
-            if let Some(main_id) = main_user_id {
-                return main_id;
+            // Get all users and check normalized usernames
+            // SQLite doesn't have great case-insensitive matching, so we do it in Rust
+            let users_rows = sqlx::query(
+                "SELECT id, telegram_username FROM users WHERE telegram_username IS NOT NULL"
+            )
+            .fetch_all(pool)
+            .await
+            .ok();
+            
+            if let Some(rows) = users_rows {
+                for row in rows {
+                    if let Ok(main_username) = row.try_get::<Option<String>, _>("telegram_username") {
+                        if let Some(main_username) = main_username {
+                            if normalize_telegram_username(&main_username) == normalized_tg_username {
+                                if let Ok(main_id) = row.try_get::<String, _>("id") {
+                                    return main_id;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
     
     // Check if this is a telegram_username string (not numeric)
-    // Try to find main user by telegram_username
-    let user_by_telegram_username: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE telegram_username = ?"
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    // Try to find main user by telegram_username (normalized)
+    let normalized_input = normalize_telegram_username(user_id);
     
-    if let Some(main_user_id) = user_by_telegram_username {
-        return main_user_id;
+    let users_rows = sqlx::query(
+        "SELECT id, telegram_username FROM users WHERE telegram_username IS NOT NULL"
+    )
+    .fetch_all(pool)
+    .await
+    .ok();
+    
+    if let Some(rows) = users_rows {
+        for row in rows {
+            if let Ok(main_username) = row.try_get::<Option<String>, _>("telegram_username") {
+                if let Some(main_username) = main_username {
+                    if normalize_telegram_username(&main_username) == normalized_input {
+                        if let Ok(main_id) = row.try_get::<String, _>("id") {
+                            return main_id;
+                        }
+                    }
+                }
+            }
+        }
     }
     
     // If telegram_user_id is provided but not linked to any main user,

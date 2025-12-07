@@ -7,6 +7,11 @@ use crate::models::{CreateTelegramUserRequest, TelegramUserResponse};
 use crate::state::AppState;
 use crate::i18n::{self, Locale};
 
+/// Normalizes telegram username by removing @ and converting to lowercase
+fn normalize_telegram_username(username: &str) -> String {
+    username.trim_start_matches('@').to_lowercase()
+}
+
 pub async fn create_or_get_telegram_user(
     req: HttpRequest,
     data: web::Json<CreateTelegramUserRequest>,
@@ -29,15 +34,67 @@ pub async fn create_or_get_telegram_user(
     .map_err(actix_web::error::ErrorInternalServerError)?;
 
     if let Some(row) = existing {
-        // User exists, return existing user
+        // User exists, check if we can auto-link by username
+        let existing_user_id = row.try_get::<Option<String>, _>("user_id").unwrap_or(None);
+        let existing_username = row.try_get::<Option<String>, _>("telegram_username").unwrap_or(None);
+        
+        // If not linked yet, try to auto-link by username
+        if existing_user_id.is_none() {
+            if let Some(tg_username) = &existing_username {
+                let normalized_tg_username = normalize_telegram_username(tg_username);
+                
+                // Try to find matching main user by normalized username
+                let users_rows = sqlx::query(
+                    "SELECT id, telegram_username FROM users WHERE telegram_username IS NOT NULL"
+                )
+                .fetch_all(pool)
+                .await
+                .ok();
+                
+                if let Some(rows) = users_rows {
+                    for user_row in rows {
+                        if let Ok(main_username) = user_row.try_get::<Option<String>, _>("telegram_username") {
+                            if let Some(main_username) = main_username {
+                                if normalize_telegram_username(&main_username) == normalized_tg_username {
+                                    if let Ok(main_id) = user_row.try_get::<String, _>("id") {
+                                        // Auto-link found, update the record
+                                        let _ = sqlx::query(
+                                            "UPDATE telegram_users SET user_id = ? WHERE telegram_user_id = ?"
+                                        )
+                                        .bind(&main_id)
+                                        .bind(telegram_req.telegram_user_id)
+                                        .execute(pool)
+                                        .await;
+                                        
+                                        // Return updated response
+                                        let response = TelegramUserResponse {
+                                            id: row.get::<String, _>("id"),
+                                            telegram_user_id: row.get::<i64, _>("telegram_user_id"),
+                                            telegram_username: existing_username,
+                                            first_name: row.try_get::<Option<String>, _>("first_name").unwrap_or(None),
+                                            last_name: row.try_get::<Option<String>, _>("last_name").unwrap_or(None),
+                                            created_at: row.get::<String, _>("created_at"),
+                                            user_id: Some(main_id),
+                                        };
+                                        return Ok(HttpResponse::Ok().json(response));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Return existing user
         let response = TelegramUserResponse {
             id: row.get::<String, _>("id"),
             telegram_user_id: row.get::<i64, _>("telegram_user_id"),
-            telegram_username: row.try_get::<Option<String>, _>("telegram_username").unwrap_or(None),
+            telegram_username: existing_username,
             first_name: row.try_get::<Option<String>, _>("first_name").unwrap_or(None),
             last_name: row.try_get::<Option<String>, _>("last_name").unwrap_or(None),
             created_at: row.get::<String, _>("created_at"),
-            user_id: row.try_get::<Option<String>, _>("user_id").unwrap_or(None),
+            user_id: existing_user_id,
         };
         return Ok(HttpResponse::Ok().json(response));
     }
@@ -69,6 +126,44 @@ pub async fn create_or_get_telegram_user(
 
     match result {
         Ok(_) => {
+            // Try to auto-link by username if telegram_username is provided
+            let mut linked_user_id = None;
+            if let Some(tg_username) = telegram_username_value {
+                let normalized_tg_username = normalize_telegram_username(tg_username);
+                
+                // Try to find matching main user by normalized username
+                let users_rows = sqlx::query(
+                    "SELECT id, telegram_username FROM users WHERE telegram_username IS NOT NULL"
+                )
+                .fetch_all(pool)
+                .await
+                .ok();
+                
+                if let Some(rows) = users_rows {
+                    for user_row in rows {
+                        if let Ok(main_username) = user_row.try_get::<Option<String>, _>("telegram_username") {
+                            if let Some(main_username) = main_username {
+                                if normalize_telegram_username(&main_username) == normalized_tg_username {
+                                    if let Ok(main_id) = user_row.try_get::<String, _>("id") {
+                                        // Auto-link found, update the record
+                                        let _ = sqlx::query(
+                                            "UPDATE telegram_users SET user_id = ? WHERE telegram_user_id = ?"
+                                        )
+                                        .bind(&main_id)
+                                        .bind(telegram_req.telegram_user_id)
+                                        .execute(pool)
+                                        .await;
+                                        
+                                        linked_user_id = Some(main_id);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
             let response = TelegramUserResponse {
                 id,
                 telegram_user_id: telegram_req.telegram_user_id,
@@ -76,7 +171,7 @@ pub async fn create_or_get_telegram_user(
                 first_name: first_name_value.map(|s| s.to_string()),
                 last_name: last_name_value.map(|s| s.to_string()),
                 created_at,
-                user_id: None,
+                user_id: linked_user_id,
             };
             Ok(HttpResponse::Created().json(response))
         }
