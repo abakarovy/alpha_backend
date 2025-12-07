@@ -856,6 +856,15 @@ async fn resolve_user_id_for_conversations(
                         if let Some(main_username) = main_username {
                             if normalize_telegram_username(&main_username) == normalized_tg_username {
                                 if let Ok(main_id) = row.try_get::<String, _>("id") {
+                                    // Auto-link telegram_user to main user if not already linked
+                                    let _ = sqlx::query(
+                                        "UPDATE telegram_users SET user_id = ? WHERE telegram_user_id = ? AND (user_id IS NULL OR user_id = '')"
+                                    )
+                                    .bind(&main_id)
+                                    .bind(telegram_user_id)
+                                    .execute(pool)
+                                    .await;
+                                    
                                     return main_id;
                                 }
                             }
