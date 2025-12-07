@@ -55,28 +55,16 @@ pub async fn send_message(
     let resolved_user_id = resolve_user_id_for_conversations(pool, &chat_req.user_id).await;
     
     let conversation_id = if let Some(cid) = chat_req.conversation_id.clone() {
-        // Get all synced user IDs to check conversation ownership
-        let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
-        
-        // Validate conversation belongs to any of the synced user_ids
-        let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let query = format!(
-            "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id IN ({})) THEN 1 ELSE 0 END",
-            placeholders
-        );
-        
-        let mut query_builder = sqlx::query_scalar::<_, i64>(&query)
-            .bind(&cid);
-        
-        for user_id in &synced_user_ids {
-            query_builder = query_builder.bind(user_id);
-        }
-        
-        let exists: Option<i64> = query_builder
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+        // Validate conversation belongs to resolved user_id (all conversations use resolved_user_id)
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
+        )
+        .bind(&cid)
+        .bind(&resolved_user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
         match exists {
             Some(1) => cid,
             _ => {
@@ -352,33 +340,25 @@ pub async fn list_conversations(
     let user_id = path.into_inner();
     let pool = &state.pool;
     
-    // Get all synced user IDs to show conversations from all linked accounts
+    // Resolve to main user_id - all conversations are stored with main user_id
     let resolved_user_id = resolve_user_id_for_conversations(pool, &user_id).await;
-    let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
     
-    // Build query with IN clause for all synced user_ids
-    let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let query = format!(
+    // Show conversations for the resolved user_id
+    // Since all conversations are created with resolved_user_id, they will be synced between platforms
+    let rows = sqlx::query(
         r#"
         SELECT 
             c.id, c.user_id, c.title, c.created_at,
             ctx.user_role, ctx.business_stage, ctx.goal, ctx.urgency, ctx.region, ctx.business_niche
         FROM conversations c
         LEFT JOIN conversation_context ctx ON c.id = ctx.conversation_id
-        WHERE c.user_id IN ({}) 
+        WHERE c.user_id = ? 
         ORDER BY datetime(c.created_at) DESC
-        "#,
-        placeholders
-    );
-    
-    let mut query_builder = sqlx::query(&query);
-    for user_id_val in &synced_user_ids {
-        query_builder = query_builder.bind(user_id_val);
-    }
-    
-    let rows = query_builder
-        .fetch_all(pool)
-        .await;
+        "#
+    )
+    .bind(&resolved_user_id)
+    .fetch_all(pool)
+    .await;
 
     match rows {
         Ok(rs) => {
@@ -516,29 +496,19 @@ pub async fn delete_conversation(
     let conversation_id = path.into_inner();
     let pool = &state.pool;
 
-    // Resolve user_id and get all synced user IDs
+    // Resolve user_id to main user_id
     let resolved_user_id = resolve_user_id_for_conversations(pool, &body.user_id).await;
-    let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
     
-    // Check if conversation belongs to any of the synced user_ids
-    let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let query = format!(
-        "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id IN ({})) THEN 1 ELSE 0 END",
-        placeholders
-    );
-    
-    let mut query_builder = sqlx::query_scalar::<_, i64>(&query)
-        .bind(&conversation_id);
-    
-    for user_id_val in &synced_user_ids {
-        query_builder = query_builder.bind(user_id_val);
-    }
-    
-    let exists: Option<i64> = query_builder
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+    // Check if conversation belongs to resolved user_id
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id = ? AND user_id = ?) THEN 1 ELSE 0 END"
+    )
+    .bind(&conversation_id)
+    .bind(&resolved_user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
 
     let locale = i18n::detect_locale(&req);
     let error_msg = match locale {
@@ -582,28 +552,17 @@ pub async fn update_conversation_title(
     let pool = &state.pool;
     let locale = i18n::detect_locale(&req);
 
-    // Resolve user_id and get all synced user IDs
+    // Resolve user_id to main user_id
     let resolved_user_id = resolve_user_id_for_conversations(pool, &update.user_id).await;
-    let synced_user_ids = get_synced_user_ids(pool, &resolved_user_id).await;
     
-    // Build query with IN clause
-    let placeholders = synced_user_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let query = format!(
-        "UPDATE conversations SET title = ? WHERE id = ? AND user_id IN ({})",
-        placeholders
-    );
-    
-    let mut query_builder = sqlx::query(&query)
-        .bind(update.title.as_deref())
-        .bind(&conversation_id);
-    
-    for user_id_val in &synced_user_ids {
-        query_builder = query_builder.bind(user_id_val);
-    }
-    
-    let result = query_builder
-        .execute(pool)
-        .await;
+    let result = sqlx::query(
+        "UPDATE conversations SET title = ? WHERE id = ? AND user_id = ?",
+    )
+    .bind(update.title.as_deref())
+    .bind(&conversation_id)
+    .bind(&resolved_user_id)
+    .execute(pool)
+    .await;
 
     let rows_affected = match result {
         Ok(r) => r.rows_affected(),
@@ -821,14 +780,17 @@ async fn generate_file_and_store(
 // ========== USER ID RESOLUTION ==========
 
 /// Resolves user_id to the main user_id for conversation synchronization
-/// If the provided user_id is a telegram_user_id, returns the linked main user_id
-/// If the telegram_user is linked to a main user, uses that user_id for conversations
-/// Otherwise, returns the original user_id
+/// Handles linking between main users and telegram users in both directions:
+/// 1. If main user_id is provided - returns it as is
+/// 2. If telegram_user_id is provided - finds linked main user_id via:
+///    - Direct link through telegram_users.user_id
+///    - Link through matching telegram_username between users and telegram_users
+/// 3. If telegram_username is provided - finds main user by telegram_username
 async fn resolve_user_id_for_conversations(
     pool: &sqlx::SqlitePool,
     user_id: &str,
 ) -> String {
-    // First, check if this is a main user_id (UUID format or exists in users table)
+    // First, check if this is a main user_id (exists in users table)
     let is_main_user: Option<i64> = sqlx::query_scalar(
         "SELECT COUNT(1) FROM users WHERE id = ?"
     )
@@ -839,13 +801,14 @@ async fn resolve_user_id_for_conversations(
     .flatten();
     
     if let Some(1) = is_main_user {
-        // This is a main user_id, check if they have telegram_username linked
-        // and if that telegram_user has conversations
+        // This is a main user_id - return it directly
+        // All conversations will be created with this user_id
         return user_id.to_string();
     }
     
-    // Check if this is a telegram_user_id (numeric) and if it's linked to a main user
+    // Check if this is a telegram_user_id (numeric)
     if let Ok(telegram_user_id) = user_id.parse::<i64>() {
+        // Try to find linked main user_id through direct link (telegram_users.user_id)
         let linked_user_id: Option<String> = sqlx::query_scalar(
             "SELECT user_id FROM telegram_users WHERE telegram_user_id = ? AND user_id IS NOT NULL"
         )
@@ -858,10 +821,37 @@ async fn resolve_user_id_for_conversations(
         if let Some(main_user_id) = linked_user_id {
             return main_user_id;
         }
+        
+        // Try to find linked main user through matching telegram_username
+        // Get telegram_username from telegram_users
+        let telegram_username: Option<String> = sqlx::query_scalar(
+            "SELECT telegram_username FROM telegram_users WHERE telegram_user_id = ? AND telegram_username IS NOT NULL"
+        )
+        .bind(telegram_user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        
+        if let Some(username) = telegram_username {
+            // Find main user with matching telegram_username
+            let main_user_id: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM users WHERE telegram_username = ?"
+            )
+            .bind(&username)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            
+            if let Some(main_id) = main_user_id {
+                return main_id;
+            }
+        }
     }
     
-    // Check if this telegram_username exists in users table
-    // (in case user_id passed is actually a telegram_username string)
+    // Check if this is a telegram_username string (not numeric)
+    // Try to find main user by telegram_username
     let user_by_telegram_username: Option<String> = sqlx::query_scalar(
         "SELECT id FROM users WHERE telegram_username = ?"
     )
@@ -875,7 +865,9 @@ async fn resolve_user_id_for_conversations(
         return main_user_id;
     }
     
-    // Fallback: return original user_id
+    // If telegram_user_id is provided but not linked to any main user,
+    // we can't create conversations (they require main user_id UUID)
+    // Return original user_id as fallback (but conversations won't work until linked)
     user_id.to_string()
 }
 
